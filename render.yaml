@@ -3,6 +3,7 @@ services:
     name: anagrams-live
     env: node
     plan: free
-    buildCommand: ":"
+    buildCommand: npm install
     startCommand: npm start
     autoDeploy: true
+    healthCheckPath: /api/health
