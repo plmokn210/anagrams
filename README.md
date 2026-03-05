@@ -30,9 +30,9 @@ Then open [http://localhost:3000](http://localhost:3000).
 ### Render
 1. Create a new GitHub repo from `/Users/ari/Desktop/anagrams`.
 2. Push the project.
-3. In Render, create a new Web Service from that repo.
-4. Render will detect `render.yaml`.
-5. Deploy and send the generated URL to your girlfriend.
+3. In Render, click `New +` and choose `Blueprint`.
+4. Connect the repo and let Render read `render.yaml`.
+5. Approve the service and deploy, then send the generated URL to your girlfriend.
 
 ### Railway
 1. Push this folder to GitHub.
