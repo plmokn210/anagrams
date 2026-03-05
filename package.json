@@ -1,0 +1,13 @@
+{
+  "name": "anagrams-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Realtime online anagrams game for two players.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

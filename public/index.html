@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anagrams Live</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Private online word duel</p>
+          <h1>Anagrams Live</h1>
+          <p class="lede">Flip one tile at a time, call words from the middle, and steal by reshaping them.</p>
+        </div>
+      </header>
+
+      <main>
+        <section class="panel" id="lobby-panel">
+          <div class="panel-header">
+            <h2>Start or join a room</h2>
+            <p>Room links are private. Share the code or URL with one other player.</p>
+          </div>
+
+          <form id="create-form" class="stacked-form">
+            <label>
+              <span>Your name</span>
+              <input id="create-name" name="name" maxlength="24" placeholder="Ari" required>
+            </label>
+            <button type="submit">Create room</button>
+          </form>
+
+          <form id="join-form" class="stacked-form split-form">
+            <label>
+              <span>Your name</span>
+              <input id="join-name" name="name" maxlength="24" placeholder="Maya" required>
+            </label>
+            <label>
+              <span>Room code</span>
+              <input id="join-code" name="roomCode" maxlength="6" placeholder="ABC123" required>
+            </label>
+            <button type="submit">Join room</button>
+          </form>
+        </section>
+
+        <section class="panel hidden" id="game-panel">
+          <div class="top-bar">
+            <div>
+              <p class="eyebrow">Room</p>
+              <h2 id="room-code">------</h2>
+            </div>
+            <div class="top-bar-actions">
+              <button id="copy-link" class="secondary">Copy invite link</button>
+              <button id="leave-room" class="ghost">Leave room</button>
+            </div>
+          </div>
+
+          <div class="status-strip">
+            <div>
+              <span class="label">Tiles left</span>
+              <strong id="bag-count">0</strong>
+            </div>
+            <div>
+              <span class="label">Last action</span>
+              <strong id="last-action">Waiting for the room to start.</strong>
+            </div>
+          </div>
+
+          <section class="board">
+            <div class="panel inset">
+              <div class="section-header">
+                <h3>Middle tiles</h3>
+                <button id="flip-tile">Flip tile</button>
+              </div>
+              <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
+            </div>
+
+            <div class="panel inset">
+              <div class="section-header">
+                <h3>Claim from the middle</h3>
+              </div>
+              <form id="claim-form" class="inline-form">
+                <input id="claim-word" placeholder="Type a word" autocomplete="off" required>
+                <button type="submit">Claim</button>
+              </form>
+            </div>
+
+            <div class="panel inset">
+              <div class="section-header">
+                <h3>Steal a word</h3>
+              </div>
+              <form id="steal-form" class="stacked-form compact">
+                <label>
+                  <span>Word to steal</span>
+                  <select id="steal-source" required></select>
+                </label>
+                <label>
+                  <span>New word</span>
+                  <input id="steal-word" placeholder="fasten" autocomplete="off" required>
+                </label>
+                <button type="submit">Steal</button>
+              </form>
+              <p class="hint">The app enforces only letter rules. If a steal feels wrong under your root rule, hit Challenge on that word before ending the round.</p>
+            </div>
+          </section>
+
+          <section class="players-grid" id="players-grid"></section>
+
+          <section class="panel inset final-panel" id="final-panel">
+            <div>
+              <h3>Finish round</h3>
+              <p id="final-copy">Resolve any challenges before you end the round.</p>
+            </div>
+            <button id="end-round" class="danger">End round</button>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
