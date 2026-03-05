@@ -189,6 +189,38 @@ function getOrCreatePlayerId(value) {
   return crypto.randomUUID();
 }
 
+function getTurnOrder(room) {
+  return Array.from(room.players.values())
+    .sort((left, right) => left.joinedAt - right.joinedAt || left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+}
+
+function setCurrentTurn(room, playerId) {
+  room.currentTurnPlayerId = playerId || getTurnOrder(room)[0]?.id || null;
+}
+
+function getNextTurnPlayerId(room, currentPlayerId) {
+  const players = getTurnOrder(room);
+  if (!players.length) {
+    return null;
+  }
+  const currentIndex = players.findIndex((player) => player.id === currentPlayerId);
+  if (currentIndex === -1) {
+    return players[0].id;
+  }
+  return players[(currentIndex + 1) % players.length].id;
+}
+
+function setRoomEvent(room, type, actor, extra = {}) {
+  room.eventSeq += 1;
+  room.lastEvent = {
+    id: room.eventSeq,
+    type,
+    actorId: actor?.id || null,
+    actorName: actor?.name || null,
+    ...extra
+  };
+}
+
 function createRoom(playerId, name) {
   const code = generateRoomCode();
   const room = {
@@ -201,6 +233,9 @@ function createRoom(playerId, name) {
     createdAt: Date.now(),
     updatedAt: Date.now(),
     clients: new Set(),
+    currentTurnPlayerId: null,
+    eventSeq: 0,
+    lastEvent: { id: 0, type: 'room_created', actorId: null, actorName: null },
     lastAction: 'Room created.'
   };
   joinRoom(room, playerId, name);
@@ -209,14 +244,19 @@ function createRoom(playerId, name) {
 }
 
 function joinRoom(room, playerId, name) {
+  const existing = room.players.get(playerId);
   room.players.set(playerId, {
     id: playerId,
     name: safePlayerName(name),
-    joinedAt: room.players.get(playerId)?.joinedAt || Date.now(),
+    joinedAt: existing?.joinedAt || Date.now(),
     updatedAt: Date.now()
   });
+  if (!room.currentTurnPlayerId) {
+    room.currentTurnPlayerId = playerId;
+  }
   room.updatedAt = Date.now();
   room.lastAction = `${safePlayerName(name)} joined the room.`;
+  setRoomEvent(room, 'join', room.players.get(playerId), { currentTurnPlayerId: room.currentTurnPlayerId });
 }
 
 function ensureRoom(code) {
@@ -238,6 +278,17 @@ function ensurePlayer(room, playerId) {
 function ensureRoundOpen(room) {
   if (room.ended) {
     throw badRequest('The round is already over.');
+  }
+}
+
+function ensureFlipTurn(room, playerId) {
+  if (!room.currentTurnPlayerId) {
+    setCurrentTurn(room, playerId);
+    return;
+  }
+  if (room.currentTurnPlayerId !== playerId) {
+    const currentTurnName = room.players.get(room.currentTurnPlayerId)?.name || 'the other player';
+    throw badRequest(`It is ${currentTurnName}'s turn to flip.`);
   }
 }
 
@@ -291,8 +342,11 @@ function serializeRoom(room, requestUrl) {
       ownerName: room.players.get(word.ownerId)?.name || 'Unknown',
       canChallenge: Boolean(word.stealHistory && word.stealHistory.length)
     })),
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    currentTurnPlayerName: room.players.get(room.currentTurnPlayerId)?.name || null,
     ended: room.ended,
     lastAction: room.lastAction,
+    lastEvent: room.lastEvent,
     winners,
     shareUrl: `${requestUrl.origin}/?room=${room.code}`
   };
@@ -329,7 +383,9 @@ function claimWord(room, playerId, rawWord, requestUrl) {
     createdAt: Date.now(),
     stealHistory: []
   });
-  room.lastAction = `${player.name} claimed ${word.toUpperCase()}.`;
+  setCurrentTurn(room, playerId);
+  room.lastAction = `${player.name} claimed ${word.toUpperCase()}. ${player.name} flips next.`;
+  setRoomEvent(room, 'claim', player, { word, currentTurnPlayerId: room.currentTurnPlayerId });
   broadcastRoom(room, requestUrl);
 }
 
@@ -376,7 +432,9 @@ function stealWord(room, playerId, sourceWordId, rawWord, requestUrl) {
   });
   source.text = word;
   source.ownerId = playerId;
-  room.lastAction = `${player.name} stole ${word.toUpperCase()}.`;
+  setCurrentTurn(room, playerId);
+  room.lastAction = `${player.name} stole ${word.toUpperCase()}. ${player.name} flips next.`;
+  setRoomEvent(room, 'steal', player, { word, currentTurnPlayerId: room.currentTurnPlayerId });
   broadcastRoom(room, requestUrl);
 }
 
@@ -398,19 +456,28 @@ function challengeWord(room, playerId, sourceWordId, requestUrl) {
   source.ownerId = lastSteal.previousOwnerId;
   const ownerName = room.players.get(source.ownerId)?.name || 'Unknown';
   room.lastAction = `${player.name} challenged the steal. ${source.text.toUpperCase()} returns to ${ownerName}.`;
+  setRoomEvent(room, 'challenge', player, { word: source.text, currentTurnPlayerId: room.currentTurnPlayerId });
   broadcastRoom(room, requestUrl);
 }
 
 function flipTile(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureFlipTurn(room, playerId);
   if (!room.bag.length) {
     throw badRequest('No tiles are left to flip.');
   }
 
   const tile = room.bag.pop();
   room.centerTiles.push(tile);
-  room.lastAction = `${player.name} flipped ${tile}.`;
+  room.currentTurnPlayerId = getNextTurnPlayerId(room, playerId);
+  const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
+  room.lastAction = `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
+  setRoomEvent(room, 'flip', player, {
+    tile,
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    nextTurnPlayerName: nextPlayerName
+  });
   broadcastRoom(room, requestUrl);
 }
 
@@ -423,6 +490,7 @@ function endRound(room, playerId, requestUrl) {
 
   room.ended = true;
   room.lastAction = `${player.name} ended the round.`;
+  setRoomEvent(room, 'end', player, { currentTurnPlayerId: room.currentTurnPlayerId });
   broadcastRoom(room, requestUrl);
 }
 

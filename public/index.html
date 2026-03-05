@@ -52,8 +52,9 @@
               <h2 id="room-code">------</h2>
             </div>
             <div class="top-bar-actions">
-              <button id="copy-link" class="secondary">Copy invite link</button>
-              <button id="leave-room" class="ghost">Leave room</button>
+              <button id="sound-toggle" class="ghost" type="button">Sound on</button>
+              <button id="copy-link" class="secondary" type="button">Copy invite link</button>
+              <button id="leave-room" class="ghost" type="button">Leave room</button>
             </div>
           </div>
 
@@ -61,6 +62,10 @@
             <div>
               <span class="label">Tiles left</span>
               <strong id="bag-count">0</strong>
+            </div>
+            <div>
+              <span class="label">Next flip</span>
+              <strong id="turn-indicator">Waiting...</strong>
             </div>
             <div>
               <span class="label">Last action</span>
@@ -72,7 +77,7 @@
             <div class="panel inset middle-panel">
               <div class="section-header">
                 <h3>Middle tiles</h3>
-                <button id="flip-tile">Flip tile</button>
+                <button id="flip-tile" type="button">Flip tile</button>
               </div>
               <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
             </div>
@@ -102,7 +107,7 @@
                 </label>
                 <button type="submit">Steal</button>
               </form>
-              <p class="hint">The app enforces only letter rules. If a steal feels wrong under your root rule, hit Challenge on that word before ending the round.</p>
+              <p class="hint">When someone claims or steals, they control the next flip. If a steal feels wrong under your root rule, hit Challenge before the round ends.</p>
             </div>
           </section>
 
@@ -113,7 +118,7 @@
               <h3>Finish round</h3>
               <p id="final-copy">Resolve any challenges before you end the round.</p>
             </div>
-            <button id="end-round" class="danger">End round</button>
+            <button id="end-round" class="danger" type="button">End round</button>
           </section>
         </section>
       </main>

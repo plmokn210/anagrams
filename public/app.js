@@ -2,7 +2,9 @@ const state = {
   playerId: localStorage.getItem('anagrams-player-id') || crypto.randomUUID(),
   playerName: localStorage.getItem('anagrams-player-name') || '',
   room: null,
-  eventSource: null
+  eventSource: null,
+  soundEnabled: localStorage.getItem('anagrams-sound-enabled') !== 'false',
+  audioContext: null
 };
 
 localStorage.setItem('anagrams-player-id', state.playerId);
@@ -17,6 +19,7 @@ const elements = {
   joinCode: document.querySelector('#join-code'),
   roomCode: document.querySelector('#room-code'),
   bagCount: document.querySelector('#bag-count'),
+  turnIndicator: document.querySelector('#turn-indicator'),
   lastAction: document.querySelector('#last-action'),
   centerTiles: document.querySelector('#center-tiles'),
   flipTile: document.querySelector('#flip-tile'),
@@ -26,6 +29,7 @@ const elements = {
   stealSource: document.querySelector('#steal-source'),
   stealWord: document.querySelector('#steal-word'),
   playersGrid: document.querySelector('#players-grid'),
+  soundToggle: document.querySelector('#sound-toggle'),
   copyLink: document.querySelector('#copy-link'),
   leaveRoom: document.querySelector('#leave-room'),
   toast: document.querySelector('#toast'),
@@ -75,6 +79,82 @@ function persistName(name) {
   elements.joinName.value = name;
 }
 
+function getAudioContext() {
+  if (state.audioContext) {
+    return state.audioContext;
+  }
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return null;
+  }
+  state.audioContext = new AudioContextClass();
+  return state.audioContext;
+}
+
+async function unlockAudio() {
+  const audioContext = getAudioContext();
+  if (!audioContext || audioContext.state === 'running') {
+    return;
+  }
+  try {
+    await audioContext.resume();
+  } catch (error) {
+    // Mobile browsers may delay unlock until the next interaction.
+  }
+}
+
+function playToneSequence(tones) {
+  if (!state.soundEnabled) {
+    return;
+  }
+  const audioContext = getAudioContext();
+  if (!audioContext || audioContext.state !== 'running') {
+    return;
+  }
+
+  const startTime = audioContext.currentTime;
+  for (const tone of tones) {
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    const toneStart = startTime + tone.offset;
+    const toneEnd = toneStart + tone.duration;
+
+    oscillator.type = tone.type;
+    oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
+    if (tone.endFrequency) {
+      oscillator.frequency.exponentialRampToValueAtTime(tone.endFrequency, toneEnd);
+    }
+
+    gainNode.gain.setValueAtTime(0.0001, toneStart);
+    gainNode.gain.exponentialRampToValueAtTime(tone.gain, toneStart + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, toneEnd);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.start(toneStart);
+    oscillator.stop(toneEnd + 0.02);
+  }
+}
+
+function playFlipSound() {
+  playToneSequence([
+    { offset: 0, duration: 0.08, frequency: 620, endFrequency: 740, gain: 0.04, type: 'triangle' },
+    { offset: 0.08, duration: 0.06, frequency: 740, endFrequency: 860, gain: 0.03, type: 'triangle' }
+  ]);
+}
+
+function playStealSound() {
+  playToneSequence([
+    { offset: 0, duration: 0.07, frequency: 740, endFrequency: 620, gain: 0.04, type: 'square' },
+    { offset: 0.08, duration: 0.07, frequency: 620, endFrequency: 540, gain: 0.035, type: 'square' },
+    { offset: 0.17, duration: 0.09, frequency: 820, endFrequency: 980, gain: 0.03, type: 'triangle' }
+  ]);
+}
+
+function renderSoundToggle() {
+  elements.soundToggle.textContent = state.soundEnabled ? 'Sound on' : 'Sound off';
+}
+
 function connectEvents(roomCode) {
   if (state.eventSource) {
     state.eventSource.close();
@@ -82,8 +162,7 @@ function connectEvents(roomCode) {
   state.eventSource = new EventSource(`/api/rooms/${roomCode}/events`);
   state.eventSource.addEventListener('state', (event) => {
     const payload = JSON.parse(event.data);
-    state.room = payload;
-    renderRoom();
+    applyRoomUpdate(payload, true);
   });
   state.eventSource.onerror = () => {
     showToast('Live connection dropped. Trying again...');
@@ -91,12 +170,11 @@ function connectEvents(roomCode) {
 }
 
 function setRoom(room) {
-  state.room = room;
   elements.lobbyPanel.classList.add('hidden');
   elements.gamePanel.classList.remove('hidden');
   history.replaceState({}, '', `/?room=${room.code}`);
+  applyRoomUpdate(room, false);
   connectEvents(room.code);
-  renderRoom();
 }
 
 function leaveRoom() {
@@ -125,7 +203,7 @@ function renderPlayers(room) {
     const words = player.words.length
       ? player.words.map((word) => {
         const challengeButton = word.canChallenge && !room.ended
-          ? `<button class="pill-action" data-action="challenge" data-word-id="${word.id}">Challenge</button>`
+          ? `<button class="pill-action" data-action="challenge" data-word-id="${word.id}" type="button">Challenge</button>`
           : '';
 
         return `
@@ -161,6 +239,18 @@ function renderStealOptions(words) {
   elements.stealSource.innerHTML = options.join('');
 }
 
+function renderTurnState(room) {
+  if (room.ended) {
+    elements.turnIndicator.textContent = 'Round over';
+    elements.flipTile.textContent = 'Flip tile';
+    return;
+  }
+
+  const isYourTurn = room.currentTurnPlayerId === state.playerId;
+  elements.turnIndicator.textContent = isYourTurn ? 'You' : room.currentTurnPlayerName || 'Waiting...';
+  elements.flipTile.textContent = isYourTurn ? 'Flip tile' : `${room.currentTurnPlayerName || 'Waiting'} is up`;
+}
+
 function renderFinalPanel(room) {
   const bagEmpty = room.bagRemaining === 0;
   elements.endRound.disabled = !bagEmpty || room.ended;
@@ -176,7 +266,7 @@ function renderFinalPanel(room) {
   if (bagEmpty) {
     elements.finalCopy.textContent = 'The bag is empty. Resolve any challenges, then end the round when ready.';
   } else {
-    elements.finalCopy.textContent = 'Resolve any challenges before you end the round.';
+    elements.finalCopy.textContent = 'Claims and steals reset who gets the next flip.';
   }
 }
 
@@ -186,14 +276,42 @@ function renderRoom() {
     return;
   }
 
+  const isYourTurn = room.currentTurnPlayerId === state.playerId;
+
   elements.roomCode.textContent = room.code;
   elements.bagCount.textContent = String(room.bagRemaining);
   elements.lastAction.textContent = room.lastAction || 'Waiting for the next move.';
-  elements.flipTile.disabled = room.ended || room.bagRemaining === 0;
+  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn;
+  renderTurnState(room);
   renderTiles(room.centerTiles);
   renderPlayers(room);
   renderStealOptions(room.allWords);
   renderFinalPanel(room);
+  renderSoundToggle();
+}
+
+function applyRoomUpdate(room, allowEffects) {
+  const previousRoom = state.room;
+  const previousEventId = previousRoom?.lastEvent?.id || 0;
+  const nextEventId = room.lastEvent?.id || 0;
+  const becameYourTurn = previousRoom && previousRoom.currentTurnPlayerId !== state.playerId && room.currentTurnPlayerId === state.playerId && !room.ended && room.bagRemaining > 0;
+
+  state.room = room;
+  renderRoom();
+
+  if (!allowEffects || nextEventId <= previousEventId) {
+    return;
+  }
+
+  if (room.lastEvent?.type === 'flip') {
+    playFlipSound();
+  }
+  if (room.lastEvent?.type === 'steal') {
+    playStealSound();
+  }
+  if (becameYourTurn) {
+    showToast('Your turn to flip.', 1800);
+  }
 }
 
 async function createRoom(name) {
@@ -229,8 +347,7 @@ async function sendAction(action, body = {}) {
       ...body
     }
   });
-  state.room = payload.room;
-  renderRoom();
+  applyRoomUpdate(payload.room, true);
 }
 
 elements.createForm.addEventListener('submit', async (event) => {
@@ -314,6 +431,18 @@ elements.playersGrid.addEventListener('click', async (event) => {
   }
 });
 
+elements.soundToggle.addEventListener('click', async () => {
+  state.soundEnabled = !state.soundEnabled;
+  localStorage.setItem('anagrams-sound-enabled', String(state.soundEnabled));
+  renderSoundToggle();
+  if (state.soundEnabled) {
+    await unlockAudio();
+    showToast('Sound on.');
+  } else {
+    showToast('Sound off.');
+  }
+});
+
 elements.copyLink.addEventListener('click', async () => {
   if (!state.room) {
     return;
@@ -338,8 +467,12 @@ elements.endRound.addEventListener('click', async () => {
   }
 });
 
+window.addEventListener('pointerdown', unlockAudio, { passive: true });
+window.addEventListener('keydown', unlockAudio);
 window.addEventListener('beforeunload', () => {
   if (state.eventSource) {
     state.eventSource.close();
   }
 });
+
+renderSoundToggle();
