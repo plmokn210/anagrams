@@ -214,7 +214,12 @@ function setRoom(room) {
   elements.gamePanel.classList.remove('hidden');
   history.replaceState({}, '', `/?room=${room.code}`);
   applyRoomUpdate(room, false);
-  maybeShowJessMessage(room.code);
+  window.requestAnimationFrame(() => {
+    maybeShowJessMessage(room.code);
+  });
+  window.setTimeout(() => {
+    maybeShowJessMessage(room.code);
+  }, 180);
   connectEvents(room.code);
 }
 
@@ -474,6 +479,11 @@ elements.createForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await createRoom(name);
+    window.requestAnimationFrame(() => {
+      if (state.room?.code) {
+        maybeShowJessMessage(state.room.code);
+      }
+    });
   } catch (error) {
     showToast(error.message);
   }
@@ -489,6 +499,11 @@ elements.joinForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await joinRoom(name, roomCode);
+    window.requestAnimationFrame(() => {
+      if (state.room?.code) {
+        maybeShowJessMessage(state.room.code);
+      }
+    });
   } catch (error) {
     showToast(error.message);
   }
