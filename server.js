@@ -234,6 +234,7 @@ function createRoom(playerId, name) {
     updatedAt: Date.now(),
     clients: new Set(),
     currentTurnPlayerId: null,
+    pendingChallenge: null,
     eventSeq: 0,
     lastEvent: { id: 0, type: 'room_created', actorId: null, actorName: null },
     lastAction: 'Room created.'
@@ -281,6 +282,12 @@ function ensureRoundOpen(room) {
   }
 }
 
+function ensureNoPendingChallenge(room) {
+  if (room.pendingChallenge) {
+    throw badRequest('Finish the challenge vote first.');
+  }
+}
+
 function ensureFlipTurn(room, playerId) {
   if (!room.currentTurnPlayerId) {
     setCurrentTurn(room, playerId);
@@ -298,6 +305,30 @@ function badRequest(message, statusCode = 400) {
   return error;
 }
 
+function serializePendingChallenge(room) {
+  if (!room.pendingChallenge) {
+    return null;
+  }
+  const keepVotes = Object.values(room.pendingChallenge.votes).filter((vote) => vote === 'keep').length;
+  const revertVotes = Object.values(room.pendingChallenge.votes).filter((vote) => vote === 'revert').length;
+  return {
+    id: room.pendingChallenge.id,
+    wordId: room.pendingChallenge.wordId,
+    wordText: room.pendingChallenge.wordText,
+    ownerId: room.pendingChallenge.ownerId,
+    ownerName: room.players.get(room.pendingChallenge.ownerId)?.name || room.pendingChallenge.ownerName,
+    challengerId: room.pendingChallenge.challengerId,
+    challengerName: room.players.get(room.pendingChallenge.challengerId)?.name || room.pendingChallenge.challengerName,
+    keepVotes,
+    revertVotes,
+    votes: room.pendingChallenge.eligiblePlayerIds.map((playerId) => ({
+      playerId,
+      playerName: room.players.get(playerId)?.name || 'Unknown',
+      decision: room.pendingChallenge.votes[playerId] || null
+    }))
+  };
+}
+
 function serializeRoom(room, requestUrl) {
   const wordsByPlayer = new Map();
   for (const playerId of room.players.keys()) {
@@ -312,7 +343,7 @@ function serializeRoom(room, requestUrl) {
       text: word.text,
       score: scoreWord(word.text),
       ownerId: word.ownerId,
-      canChallenge: Boolean(word.stealHistory && word.stealHistory.length)
+      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingChallenge
     });
   }
 
@@ -340,10 +371,11 @@ function serializeRoom(room, requestUrl) {
       text: word.text,
       ownerId: word.ownerId,
       ownerName: room.players.get(word.ownerId)?.name || 'Unknown',
-      canChallenge: Boolean(word.stealHistory && word.stealHistory.length)
+      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingChallenge
     })),
     currentTurnPlayerId: room.currentTurnPlayerId,
-    currentTurnPlayerName: room.players.get(room.currentTurnPlayerId)?.name || null,
+    currentTurnPlayerName: room.pendingChallenge ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
+    pendingChallenge: serializePendingChallenge(room),
     ended: room.ended,
     lastAction: room.lastAction,
     lastEvent: room.lastEvent,
@@ -363,6 +395,7 @@ function broadcastRoom(room, requestUrl) {
 function claimWord(room, playerId, rawWord, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureNoPendingChallenge(room);
   const word = normalizeWord(rawWord);
 
   if (!isValidWordShape(word)) {
@@ -392,6 +425,7 @@ function claimWord(room, playerId, rawWord, requestUrl) {
 function stealWord(room, playerId, sourceWordId, rawWord, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureNoPendingChallenge(room);
   const word = normalizeWord(rawWord);
   const source = room.words.find((entry) => entry.id === sourceWordId);
 
@@ -422,11 +456,13 @@ function stealWord(room, playerId, sourceWordId, rawWord, requestUrl) {
     throw badRequest('The extra letters are not all available in the middle.');
   }
 
+  const previousTurnPlayerId = room.currentTurnPlayerId;
   removeLettersFromCenter(room, extraCounts);
   source.stealHistory = source.stealHistory || [];
   source.stealHistory.push({
     previousText: source.text,
     previousOwnerId: source.ownerId,
+    previousTurnPlayerId,
     addedCounts: copyCounts(extraCounts),
     createdAt: Date.now()
   });
@@ -441,6 +477,7 @@ function stealWord(room, playerId, sourceWordId, rawWord, requestUrl) {
 function challengeWord(room, playerId, sourceWordId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureNoPendingChallenge(room);
   const source = room.words.find((entry) => entry.id === sourceWordId);
 
   if (!source) {
@@ -450,19 +487,104 @@ function challengeWord(room, playerId, sourceWordId, requestUrl) {
     throw badRequest('That word has no steal to challenge.');
   }
 
+  const eligiblePlayerIds = getTurnOrder(room).map((entry) => entry.id);
+  room.pendingChallenge = {
+    id: crypto.randomUUID(),
+    wordId: source.id,
+    wordText: source.text,
+    ownerId: source.ownerId,
+    ownerName: room.players.get(source.ownerId)?.name || 'Unknown',
+    challengerId: player.id,
+    challengerName: player.name,
+    eligiblePlayerIds,
+    votes: {},
+    openedAt: Date.now()
+  };
+  room.lastAction = `${player.name} challenged ${source.text.toUpperCase()}. Voting is open.`;
+  setRoomEvent(room, 'challenge_opened', player, {
+    word: source.text,
+    challengeId: room.pendingChallenge.id,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+  broadcastRoom(room, requestUrl);
+}
+
+function revertLatestSteal(room, source) {
   const lastSteal = source.stealHistory.pop();
   addLettersToCenter(room, lastSteal.addedCounts);
   source.text = lastSteal.previousText;
   source.ownerId = lastSteal.previousOwnerId;
-  const ownerName = room.players.get(source.ownerId)?.name || 'Unknown';
-  room.lastAction = `${player.name} challenged the steal. ${source.text.toUpperCase()} returns to ${ownerName}.`;
-  setRoomEvent(room, 'challenge', player, { word: source.text, currentTurnPlayerId: room.currentTurnPlayerId });
+  return lastSteal;
+}
+
+function resolveChallenge(room, actor, requestUrl) {
+  const challenge = room.pendingChallenge;
+  const source = room.words.find((entry) => entry.id === challenge.wordId);
+  if (!source || !source.stealHistory || !source.stealHistory.length) {
+    room.pendingChallenge = null;
+    throw badRequest('The challenged word can no longer be resolved.');
+  }
+
+  const keepVotes = Object.values(challenge.votes).filter((vote) => vote === 'keep').length;
+  const revertVotes = Object.values(challenge.votes).filter((vote) => vote === 'revert').length;
+
+  if (keepVotes > revertVotes) {
+    room.lastAction = `Vote complete. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
+    setRoomEvent(room, 'challenge_resolved_keep', actor, {
+      word: source.text,
+      currentTurnPlayerId: room.currentTurnPlayerId
+    });
+  } else {
+    const reverted = revertLatestSteal(room, source);
+    setCurrentTurn(room, reverted.previousTurnPlayerId || source.ownerId);
+    room.lastAction = `Vote complete. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
+    setRoomEvent(room, 'challenge_resolved_revert', actor, {
+      word: source.text,
+      currentTurnPlayerId: room.currentTurnPlayerId
+    });
+  }
+
+  room.pendingChallenge = null;
+  broadcastRoom(room, requestUrl);
+}
+
+function voteChallenge(room, playerId, decision, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  if (!room.pendingChallenge) {
+    throw badRequest('There is no active challenge to vote on.');
+  }
+  if (!room.pendingChallenge.eligiblePlayerIds.includes(playerId)) {
+    throw badRequest('You are not part of this challenge vote.');
+  }
+  if (!['keep', 'revert'].includes(decision)) {
+    throw badRequest('Vote must be keep or revert.');
+  }
+
+  room.pendingChallenge.votes[playerId] = decision;
+  const everyoneVoted = room.pendingChallenge.eligiblePlayerIds.every((id) => room.pendingChallenge.votes[id]);
+
+  if (everyoneVoted) {
+    resolveChallenge(room, player, requestUrl);
+    return;
+  }
+
+  const waitingOn = room.pendingChallenge.eligiblePlayerIds
+    .filter((id) => !room.pendingChallenge.votes[id])
+    .map((id) => room.players.get(id)?.name || 'Unknown');
+
+  room.lastAction = `${player.name} voted. Waiting on ${waitingOn.join(', ')}.`;
+  setRoomEvent(room, 'challenge_vote', player, {
+    word: room.pendingChallenge.wordText,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
   broadcastRoom(room, requestUrl);
 }
 
 function flipTile(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureNoPendingChallenge(room);
   ensureFlipTurn(room, playerId);
   if (!room.bag.length) {
     throw badRequest('No tiles are left to flip.');
@@ -484,6 +606,7 @@ function flipTile(room, playerId, requestUrl) {
 function endRound(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureNoPendingChallenge(room);
   if (room.bag.length > 0) {
     throw badRequest('You can only end the round after the bag is empty.');
   }
@@ -594,7 +717,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|claim|steal|challenge|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|claim|steal|challenge|vote|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -659,6 +782,12 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      if (request.method === 'POST' && action === 'vote') {
+        voteChallenge(room, playerId, body.decision, requestUrl);
+        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
+        return;
+      }
+
       if (request.method === 'POST' && action === 'end') {
         endRound(room, playerId, requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
@@ -691,6 +820,7 @@ module.exports = {
   claimWord,
   stealWord,
   challengeWord,
+  voteChallenge,
   flipTile,
   endRound,
   serializeRoom

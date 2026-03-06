@@ -73,13 +73,32 @@
             </div>
           </div>
 
+          <section class="panel inset challenge-panel hidden" id="challenge-panel">
+            <div class="challenge-copy">
+              <p class="eyebrow">Game Paused</p>
+              <h3 id="challenge-title">Challenge open</h3>
+              <p id="challenge-description">Vote to keep or revert the stolen word.</p>
+            </div>
+            <div class="challenge-actions" id="challenge-actions">
+              <button id="vote-keep" class="secondary" type="button">Keep word</button>
+              <button id="vote-revert" class="danger" type="button">Revert word</button>
+            </div>
+            <div class="vote-list" id="challenge-votes"></div>
+          </section>
+
           <section class="board">
             <div class="panel inset middle-panel">
               <div class="section-header">
                 <h3>Middle tiles</h3>
                 <button id="flip-tile" type="button">Flip tile</button>
               </div>
-              <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
+              <div class="middle-layout">
+                <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
+                <aside class="compact-word-rail">
+                  <p class="eyebrow">Live words</p>
+                  <div id="compact-words" class="compact-words"></div>
+                </aside>
+              </div>
             </div>
 
             <div class="panel inset">
@@ -107,7 +126,7 @@
                 </label>
                 <button type="submit">Steal</button>
               </form>
-              <p class="hint">When someone claims or steals, they control the next flip. If a steal feels wrong under your root rule, hit Challenge before the round ends.</p>
+              <p class="hint">Claims and steals decide who flips next. If a steal is disputed, challenge it and the room votes before play resumes.</p>
             </div>
           </section>
 

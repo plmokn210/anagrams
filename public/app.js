@@ -22,6 +22,7 @@ const elements = {
   turnIndicator: document.querySelector('#turn-indicator'),
   lastAction: document.querySelector('#last-action'),
   centerTiles: document.querySelector('#center-tiles'),
+  compactWords: document.querySelector('#compact-words'),
   flipTile: document.querySelector('#flip-tile'),
   claimForm: document.querySelector('#claim-form'),
   claimWord: document.querySelector('#claim-word'),
@@ -29,6 +30,12 @@ const elements = {
   stealSource: document.querySelector('#steal-source'),
   stealWord: document.querySelector('#steal-word'),
   playersGrid: document.querySelector('#players-grid'),
+  challengePanel: document.querySelector('#challenge-panel'),
+  challengeTitle: document.querySelector('#challenge-title'),
+  challengeDescription: document.querySelector('#challenge-description'),
+  challengeVotes: document.querySelector('#challenge-votes'),
+  voteKeep: document.querySelector('#vote-keep'),
+  voteRevert: document.querySelector('#vote-revert'),
   soundToggle: document.querySelector('#sound-toggle'),
   copyLink: document.querySelector('#copy-link'),
   leaveRoom: document.querySelector('#leave-room'),
@@ -198,11 +205,23 @@ function renderTiles(tiles) {
   elements.centerTiles.innerHTML = tiles.map((tile) => `<span class="tile">${tile}</span>`).join('');
 }
 
+function renderCompactWords(room) {
+  elements.compactWords.innerHTML = room.players.map((player) => {
+    const words = player.words.length ? player.words.map((word) => word.text.toUpperCase()).join(' · ') : 'none';
+    return `
+      <article class="compact-player">
+        <strong>${player.name}${player.id === state.playerId ? ' (You)' : ''}</strong>
+        <p>${words}</p>
+      </article>
+    `;
+  }).join('');
+}
+
 function renderPlayers(room) {
   elements.playersGrid.innerHTML = room.players.map((player) => {
     const words = player.words.length
       ? player.words.map((word) => {
-        const challengeButton = word.canChallenge && !room.ended
+        const challengeButton = word.canChallenge && !room.ended && !room.pendingChallenge
           ? `<button class="pill-action" data-action="challenge" data-word-id="${word.id}" type="button">Challenge</button>`
           : '';
 
@@ -245,15 +264,48 @@ function renderTurnState(room) {
     elements.flipTile.textContent = 'Flip tile';
     return;
   }
+  if (room.pendingChallenge) {
+    elements.turnIndicator.textContent = 'Vote pending';
+    elements.flipTile.textContent = 'Vote pending';
+    return;
+  }
 
   const isYourTurn = room.currentTurnPlayerId === state.playerId;
   elements.turnIndicator.textContent = isYourTurn ? 'You' : room.currentTurnPlayerName || 'Waiting...';
   elements.flipTile.textContent = isYourTurn ? 'Flip tile' : `${room.currentTurnPlayerName || 'Waiting'} is up`;
 }
 
+function renderChallenge(room) {
+  const challenge = room.pendingChallenge;
+  if (!challenge) {
+    elements.challengePanel.classList.add('hidden');
+    return;
+  }
+
+  elements.challengePanel.classList.remove('hidden');
+  elements.challengeTitle.textContent = `Challenge on ${challenge.wordText.toUpperCase()}`;
+  elements.challengeDescription.textContent = `${challenge.challengerName} challenged ${challenge.ownerName}'s word. Everyone votes before play resumes.`;
+
+  const myVote = challenge.votes.find((vote) => vote.playerId === state.playerId)?.decision || null;
+  elements.voteKeep.disabled = false;
+  elements.voteRevert.disabled = false;
+  elements.voteKeep.classList.toggle('selected', myVote === 'keep');
+  elements.voteRevert.classList.toggle('selected', myVote === 'revert');
+
+  elements.challengeVotes.innerHTML = challenge.votes.map((vote) => {
+    const label = vote.decision ? (vote.decision === 'keep' ? 'keep' : 'revert') : 'waiting';
+    return `
+      <div class="vote-row ${vote.decision ? 'voted' : 'pending'}">
+        <span>${vote.playerName}${vote.playerId === state.playerId ? ' (You)' : ''}</span>
+        <strong>${label}</strong>
+      </div>
+    `;
+  }).join('');
+}
+
 function renderFinalPanel(room) {
   const bagEmpty = room.bagRemaining === 0;
-  elements.endRound.disabled = !bagEmpty || room.ended;
+  elements.endRound.disabled = !bagEmpty || room.ended || Boolean(room.pendingChallenge);
 
   if (room.ended) {
     const winnerCopy = room.winners.length > 1
@@ -262,7 +314,10 @@ function renderFinalPanel(room) {
     elements.finalCopy.textContent = winnerCopy;
     return;
   }
-
+  if (room.pendingChallenge) {
+    elements.finalCopy.textContent = 'Voting is open. Finish the challenge before ending the round.';
+    return;
+  }
   if (bagEmpty) {
     elements.finalCopy.textContent = 'The bag is empty. Resolve any challenges, then end the round when ready.';
   } else {
@@ -277,15 +332,23 @@ function renderRoom() {
   }
 
   const isYourTurn = room.currentTurnPlayerId === state.playerId;
+  const pausedForChallenge = Boolean(room.pendingChallenge);
 
   elements.roomCode.textContent = room.code;
   elements.bagCount.textContent = String(room.bagRemaining);
   elements.lastAction.textContent = room.lastAction || 'Waiting for the next move.';
-  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn;
+  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn || pausedForChallenge;
+  elements.claimWord.disabled = room.ended || pausedForChallenge;
+  elements.stealSource.disabled = room.ended || pausedForChallenge;
+  elements.stealWord.disabled = room.ended || pausedForChallenge;
+  elements.claimForm.querySelector('button').disabled = room.ended || pausedForChallenge;
+  elements.stealForm.querySelector('button').disabled = room.ended || pausedForChallenge;
   renderTurnState(room);
   renderTiles(room.centerTiles);
+  renderCompactWords(room);
   renderPlayers(room);
   renderStealOptions(room.allWords);
+  renderChallenge(room);
   renderFinalPanel(room);
   renderSoundToggle();
 }
@@ -294,7 +357,12 @@ function applyRoomUpdate(room, allowEffects) {
   const previousRoom = state.room;
   const previousEventId = previousRoom?.lastEvent?.id || 0;
   const nextEventId = room.lastEvent?.id || 0;
-  const becameYourTurn = previousRoom && previousRoom.currentTurnPlayerId !== state.playerId && room.currentTurnPlayerId === state.playerId && !room.ended && room.bagRemaining > 0;
+  const becameYourTurn = previousRoom
+    && previousRoom.currentTurnPlayerId !== state.playerId
+    && room.currentTurnPlayerId === state.playerId
+    && !room.ended
+    && !room.pendingChallenge
+    && room.bagRemaining > 0;
 
   state.room = room;
   renderRoom();
@@ -308,6 +376,12 @@ function applyRoomUpdate(room, allowEffects) {
   }
   if (room.lastEvent?.type === 'steal') {
     playStealSound();
+  }
+  if (room.lastEvent?.type === 'challenge_opened') {
+    showToast('Challenge opened. Vote to continue.', 2200);
+  }
+  if (room.lastEvent?.type === 'challenge_resolved_keep' || room.lastEvent?.type === 'challenge_resolved_revert') {
+    showToast('Vote finished. Game resumed.', 1800);
   }
   if (becameYourTurn) {
     showToast('Your turn to flip.', 1800);
@@ -426,6 +500,22 @@ elements.playersGrid.addEventListener('click', async (event) => {
 
   try {
     await sendAction('challenge', { sourceWordId: button.dataset.wordId });
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+elements.voteKeep.addEventListener('click', async () => {
+  try {
+    await sendAction('vote', { decision: 'keep' });
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
+elements.voteRevert.addEventListener('click', async () => {
+  try {
+    await sendAction('vote', { decision: 'revert' });
   } catch (error) {
     showToast(error.message);
   }

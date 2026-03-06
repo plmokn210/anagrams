@@ -9,6 +9,7 @@
   --brand: #0f5a4e;
   --brand-dark: #093d35;
   --danger: #9d3d23;
+  --danger-dark: #7f2f19;
   --tile: #f5cd73;
   --tile-edge: #c98724;
   --shadow: 0 18px 40px rgba(69, 50, 21, 0.16);
@@ -49,7 +50,7 @@ button {
   background: var(--brand);
   color: #fff;
   cursor: pointer;
-  transition: transform 120ms ease, background 120ms ease;
+  transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
   touch-action: manipulation;
 }
 
@@ -71,6 +72,14 @@ button.ghost {
 
 button.danger {
   background: var(--danger);
+}
+
+button.danger:hover {
+  background: var(--danger-dark);
+}
+
+button.selected {
+  box-shadow: inset 0 0 0 2px rgba(31, 28, 23, 0.18);
 }
 
 button:disabled {
@@ -165,7 +174,8 @@ h3 {
 .section-header,
 .top-bar,
 .status-strip,
-.final-panel {
+.final-panel,
+.challenge-actions {
   display: flex;
   gap: 1rem;
   justify-content: space-between;
@@ -197,6 +207,63 @@ h3 {
   align-items: end;
 }
 
+.status-strip {
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border-radius: 20px;
+  background: rgba(15, 90, 78, 0.08);
+}
+
+.status-strip > div {
+  min-width: 0;
+}
+
+.status-strip strong {
+  display: block;
+}
+
+#last-action {
+  max-width: 56ch;
+}
+
+.challenge-panel {
+  margin-top: 1rem;
+  display: grid;
+  gap: 1rem;
+  border: 1px solid rgba(157, 61, 35, 0.18);
+  background: linear-gradient(180deg, rgba(255, 244, 238, 0.98), rgba(255, 251, 247, 0.98));
+}
+
+.challenge-copy p,
+.challenge-copy h3 {
+  margin-bottom: 0.35rem;
+}
+
+.vote-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.vote-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.7rem 0.85rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(31, 28, 23, 0.08);
+}
+
+.vote-row.pending strong {
+  color: var(--muted);
+}
+
+.vote-row.voted strong {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .board {
   display: grid;
   grid-template-columns: 1.4fr 1fr 1fr;
@@ -206,6 +273,10 @@ h3 {
 
 .middle-panel {
   overflow: hidden;
+}
+
+.middle-layout {
+  display: block;
 }
 
 .tile-rack {
@@ -233,6 +304,33 @@ h3 {
   font-size: 1.7rem;
   font-weight: 700;
   flex: 0 0 auto;
+}
+
+.compact-word-rail {
+  display: none;
+}
+
+.compact-words {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.compact-player {
+  padding: 0.55rem 0.65rem;
+  border-radius: 14px;
+  background: rgba(239, 231, 216, 0.75);
+}
+
+.compact-player strong {
+  display: block;
+  font-size: 0.72rem;
+  margin-bottom: 0.2rem;
+}
+
+.compact-player p {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .players-grid {
@@ -298,25 +396,6 @@ h3 {
   background: #e7bea5;
 }
 
-.status-strip {
-  margin-top: 1rem;
-  padding: 1rem 1.1rem;
-  border-radius: 20px;
-  background: rgba(15, 90, 78, 0.08);
-}
-
-.status-strip > div {
-  min-width: 0;
-}
-
-.status-strip strong {
-  display: block;
-}
-
-#last-action {
-  max-width: 56ch;
-}
-
 .final-panel {
   margin-top: 1rem;
   padding: 1.1rem 1.25rem;
@@ -350,6 +429,7 @@ h3 {
   .panel-header,
   .status-strip,
   .final-panel,
+  .challenge-actions,
   .split-form,
   .top-bar-actions,
   .inline-form,
@@ -375,6 +455,7 @@ h3 {
   }
 
   .top-bar-actions button,
+  .challenge-actions button,
   .inline-form button,
   .final-panel button,
   .stacked-form button {
@@ -385,8 +466,16 @@ h3 {
     align-items: stretch;
   }
 
+  .middle-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(112px, 0.95fr);
+    gap: 0.75rem;
+    align-items: start;
+  }
+
   .tile-rack {
     justify-content: center;
+    align-content: start;
     min-height: 78px;
   }
 
@@ -394,6 +483,12 @@ h3 {
     width: 48px;
     height: 56px;
     font-size: 1.4rem;
+  }
+
+  .compact-word-rail {
+    display: block;
+    border-left: 1px solid rgba(31, 28, 23, 0.08);
+    padding-left: 0.7rem;
   }
 
   .players-grid {
@@ -432,6 +527,19 @@ h3 {
     margin-bottom: 1rem;
   }
 
+  .status-strip,
+  .player-card,
+  .final-panel,
+  .panel.inset,
+  .challenge-panel {
+    border-radius: 18px;
+  }
+
+  .middle-layout {
+    grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.88fr);
+    gap: 0.55rem;
+  }
+
   .tile-rack {
     gap: 0.45rem;
   }
@@ -443,11 +551,13 @@ h3 {
     border-radius: 14px;
   }
 
-  .status-strip,
-  .player-card,
-  .final-panel,
-  .panel.inset {
-    border-radius: 18px;
+  .compact-word-rail {
+    padding-left: 0.55rem;
+  }
+
+  .compact-player strong,
+  .compact-player p {
+    font-size: 0.68rem;
   }
 
   .toast {
