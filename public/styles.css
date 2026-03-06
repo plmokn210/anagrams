@@ -419,6 +419,10 @@ h3 {
   z-index: 30;
 }
 
+.modal-backdrop.hidden {
+  display: none;
+}
+
 .message-modal-card {
   width: min(100%, 420px);
   padding: 1.35rem;
