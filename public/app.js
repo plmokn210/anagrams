@@ -29,6 +29,7 @@ const elements = {
   playSource: document.querySelector('#play-source'),
   playersGrid: document.querySelector('#players-grid'),
   votePanel: document.querySelector('#vote-panel'),
+  homeButton: document.querySelector('#home-button'),
   voteTitle: document.querySelector('#vote-title'),
   voteDescription: document.querySelector('#vote-description'),
   voteList: document.querySelector('#vote-list'),
@@ -37,6 +38,9 @@ const elements = {
   soundToggle: document.querySelector('#sound-toggle'),
   copyLink: document.querySelector('#copy-link'),
   leaveRoom: document.querySelector('#leave-room'),
+  messageModal: document.querySelector('#message-modal'),
+  messageModalBody: document.querySelector('#message-modal-body'),
+  messageModalClose: document.querySelector('#message-modal-close'),
   toast: document.querySelector('#toast'),
   finalCopy: document.querySelector('#final-copy'),
   endRound: document.querySelector('#end-round')
@@ -82,6 +86,24 @@ function persistName(name) {
   localStorage.setItem('anagrams-player-name', name);
   elements.createName.value = name;
   elements.joinName.value = name;
+}
+
+function normalizeNameForMessage(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function shouldShowJessMessage(name) {
+  const normalized = normalizeNameForMessage(name);
+  return normalized.startsWith('jess');
+}
+
+function showJessMessage(name) {
+  elements.messageModalBody.textContent = `hey ${String(name || 'jess').trim().toLowerCase()}, hope you enjoy this game i made for you. miss you`;
+  elements.messageModal.classList.remove('hidden');
+}
+
+function closeJessMessage() {
+  elements.messageModal.classList.add('hidden');
 }
 
 function getAudioContext() {
@@ -191,6 +213,12 @@ function leaveRoom() {
   history.replaceState({}, '', '/');
   elements.gamePanel.classList.add('hidden');
   elements.lobbyPanel.classList.remove('hidden');
+}
+
+function goHome() {
+  closeJessMessage();
+  leaveRoom();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function renderTiles(tiles) {
@@ -432,6 +460,9 @@ elements.createForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await createRoom(name);
+    if (shouldShowJessMessage(name)) {
+      showJessMessage(name);
+    }
   } catch (error) {
     showToast(error.message);
   }
@@ -447,6 +478,9 @@ elements.joinForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await joinRoom(name, roomCode);
+    if (shouldShowJessMessage(name)) {
+      showJessMessage(name);
+    }
   } catch (error) {
     showToast(error.message);
   }
@@ -533,6 +567,20 @@ elements.copyLink.addEventListener('click', async () => {
 
 elements.leaveRoom.addEventListener('click', () => {
   leaveRoom();
+});
+
+elements.homeButton.addEventListener('click', () => {
+  goHome();
+});
+
+elements.messageModalClose.addEventListener('click', () => {
+  closeJessMessage();
+});
+
+elements.messageModal.addEventListener('click', (event) => {
+  if (event.target === elements.messageModal) {
+    closeJessMessage();
+  }
 });
 
 elements.endRound.addEventListener('click', async () => {

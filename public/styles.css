@@ -408,7 +408,36 @@ h3 {
   display: none;
 }
 
-.toast {
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(31, 28, 23, 0.48);
+  z-index: 30;
+}
+
+.message-modal-card {
+  width: min(100%, 420px);
+  padding: 1.25rem;
+  border-radius: 22px;
+  background: #fffaf2;
+  border: 1px solid rgba(31, 28, 23, 0.08);
+  box-shadow: var(--shadow);
+}
+
+.message-modal-card h3 {
+  margin-bottom: 0.4rem;
+}
+
+.message-modal-card p:last-of-type {
+  margin-bottom: 1rem;
+  line-height: 1.45;
+}
+
+toast {
   position: fixed;
   left: 50%;
   bottom: calc(24px + env(safe-area-inset-bottom));
