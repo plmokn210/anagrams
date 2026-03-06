@@ -100,10 +100,14 @@ function shouldShowJessMessage(name) {
 
 function showJessMessage(name) {
   elements.messageModalBody.textContent = `hey ${String(name || 'jess').trim().toLowerCase()}, hope you enjoy this game i made for you. miss you`;
+  elements.messageModal.hidden = false;
+  elements.messageModal.setAttribute('aria-hidden', 'false');
   elements.messageModal.classList.remove('hidden');
 }
 
 function closeJessMessage() {
+  elements.messageModal.hidden = true;
+  elements.messageModal.setAttribute('aria-hidden', 'true');
   elements.messageModal.classList.add('hidden');
 }
 
@@ -623,3 +627,4 @@ window.addEventListener('beforeunload', () => {
 });
 
 renderSoundToggle();
+closeJessMessage();
