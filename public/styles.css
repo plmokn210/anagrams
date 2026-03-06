@@ -421,11 +421,40 @@ h3 {
 
 .message-modal-card {
   width: min(100%, 420px);
-  padding: 1.25rem;
-  border-radius: 22px;
-  background: #fffaf2;
-  border: 1px solid rgba(31, 28, 23, 0.08);
+  padding: 1.35rem;
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 186, 204, 0.55), transparent 30%),
+    radial-gradient(circle at bottom left, rgba(255, 220, 229, 0.75), transparent 34%),
+    linear-gradient(180deg, #fff7fb, #fff3f5);
+  border: 1px solid rgba(157, 61, 35, 0.12);
   box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.heart-row,
+.heart-burst {
+  display: flex;
+  justify-content: center;
+  gap: 0.45rem;
+  color: #c65378;
+}
+
+.heart-row {
+  margin-bottom: 0.55rem;
+  font-size: 1.1rem;
+}
+
+.heart-burst {
+  margin: 0.95rem 0 1rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+}
+
+.heart-row span:nth-child(2),
+.heart-burst span:nth-child(3),
+.heart-burst span:nth-child(5) {
+  color: #e7a2b7;
 }
 
 .message-modal-card h3 {
@@ -433,11 +462,11 @@ h3 {
 }
 
 .message-modal-card p:last-of-type {
-  margin-bottom: 1rem;
+  margin-bottom: 0;
   line-height: 1.45;
 }
 
-toast {
+.toast {
   position: fixed;
   left: 50%;
   bottom: calc(24px + env(safe-area-inset-bottom));

@@ -4,7 +4,8 @@ const state = {
   room: null,
   eventSource: null,
   soundEnabled: localStorage.getItem('anagrams-sound-enabled') !== 'false',
-  audioContext: null
+  audioContext: null,
+  shownJessRoomKey: null
 };
 
 localStorage.setItem('anagrams-player-id', state.playerId);
@@ -106,6 +107,18 @@ function closeJessMessage() {
   elements.messageModal.classList.add('hidden');
 }
 
+function maybeShowJessMessage(roomCode) {
+  if (!shouldShowJessMessage(state.playerName) || !roomCode) {
+    return;
+  }
+  const roomKey = `${roomCode}:${normalizeNameForMessage(state.playerName)}`;
+  if (state.shownJessRoomKey === roomKey) {
+    return;
+  }
+  state.shownJessRoomKey = roomKey;
+  showJessMessage(state.playerName);
+}
+
 function getAudioContext() {
   if (state.audioContext) {
     return state.audioContext;
@@ -201,6 +214,7 @@ function setRoom(room) {
   elements.gamePanel.classList.remove('hidden');
   history.replaceState({}, '', `/?room=${room.code}`);
   applyRoomUpdate(room, false);
+  maybeShowJessMessage(room.code);
   connectEvents(room.code);
 }
 
@@ -460,9 +474,6 @@ elements.createForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await createRoom(name);
-    if (shouldShowJessMessage(name)) {
-      showJessMessage(name);
-    }
   } catch (error) {
     showToast(error.message);
   }
@@ -478,9 +489,6 @@ elements.joinForm.addEventListener('submit', async (event) => {
   try {
     persistName(name);
     await joinRoom(name, roomCode);
-    if (shouldShowJessMessage(name)) {
-      showJessMessage(name);
-    }
   } catch (error) {
     showToast(error.message);
   }
