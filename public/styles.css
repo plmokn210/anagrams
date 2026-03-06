@@ -175,7 +175,7 @@ h3 {
 .top-bar,
 .status-strip,
 .final-panel,
-.challenge-actions {
+.vote-actions {
   display: flex;
   gap: 1rem;
   justify-content: space-between;
@@ -226,7 +226,7 @@ h3 {
   max-width: 56ch;
 }
 
-.challenge-panel {
+.vote-panel {
   margin-top: 1rem;
   display: grid;
   gap: 1rem;
@@ -234,8 +234,8 @@ h3 {
   background: linear-gradient(180deg, rgba(255, 244, 238, 0.98), rgba(255, 251, 247, 0.98));
 }
 
-.challenge-copy p,
-.challenge-copy h3 {
+.vote-copy p,
+.vote-copy h3 {
   margin-bottom: 0.35rem;
 }
 
@@ -266,17 +266,47 @@ h3 {
 
 .board {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1fr;
   gap: 1rem;
   margin: 1.5rem 0;
+}
+
+.play-panel {
+  align-self: start;
 }
 
 .middle-panel {
   overflow: hidden;
 }
 
-.middle-layout {
+.compact-word-strip {
+  margin: 0.75rem 0 0.9rem;
+}
+
+.compact-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.compact-player {
+  padding: 0.5rem 0.65rem;
+  border-radius: 14px;
+  background: rgba(239, 231, 216, 0.82);
+  max-width: 100%;
+}
+
+.compact-player strong {
   display: block;
+  font-size: 0.72rem;
+  margin-bottom: 0.15rem;
+}
+
+.compact-player p {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  word-break: break-word;
 }
 
 .tile-rack {
@@ -304,33 +334,6 @@ h3 {
   font-size: 1.7rem;
   font-weight: 700;
   flex: 0 0 auto;
-}
-
-.compact-word-rail {
-  display: none;
-}
-
-.compact-words {
-  display: grid;
-  gap: 0.45rem;
-}
-
-.compact-player {
-  padding: 0.55rem 0.65rem;
-  border-radius: 14px;
-  background: rgba(239, 231, 216, 0.75);
-}
-
-.compact-player strong {
-  display: block;
-  font-size: 0.72rem;
-  margin-bottom: 0.2rem;
-}
-
-.compact-player p {
-  margin: 0;
-  font-size: 0.72rem;
-  line-height: 1.35;
 }
 
 .players-grid {
@@ -429,11 +432,9 @@ h3 {
   .panel-header,
   .status-strip,
   .final-panel,
-  .challenge-actions,
+  .vote-actions,
   .split-form,
   .top-bar-actions,
-  .inline-form,
-  .mobile-stack,
   .player-head {
     flex-direction: column;
     align-items: stretch;
@@ -455,8 +456,7 @@ h3 {
   }
 
   .top-bar-actions button,
-  .challenge-actions button,
-  .inline-form button,
+  .vote-actions button,
   .final-panel button,
   .stacked-form button {
     width: 100%;
@@ -466,16 +466,8 @@ h3 {
     align-items: stretch;
   }
 
-  .middle-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(112px, 0.95fr);
-    gap: 0.75rem;
-    align-items: start;
-  }
-
   .tile-rack {
     justify-content: center;
-    align-content: start;
     min-height: 78px;
   }
 
@@ -483,12 +475,6 @@ h3 {
     width: 48px;
     height: 56px;
     font-size: 1.4rem;
-  }
-
-  .compact-word-rail {
-    display: block;
-    border-left: 1px solid rgba(31, 28, 23, 0.08);
-    padding-left: 0.7rem;
   }
 
   .players-grid {
@@ -531,13 +517,22 @@ h3 {
   .player-card,
   .final-panel,
   .panel.inset,
-  .challenge-panel {
+  .vote-panel {
     border-radius: 18px;
   }
 
-  .middle-layout {
-    grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.88fr);
-    gap: 0.55rem;
+  .compact-word-strip {
+    margin-top: 0.45rem;
+    margin-bottom: 0.7rem;
+  }
+
+  .compact-words {
+    gap: 0.35rem;
+  }
+
+  .compact-player strong,
+  .compact-player p {
+    font-size: 0.66rem;
   }
 
   .tile-rack {
@@ -549,15 +544,6 @@ h3 {
     height: min(16vw, 54px);
     font-size: min(6vw, 1.3rem);
     border-radius: 14px;
-  }
-
-  .compact-word-rail {
-    padding-left: 0.55rem;
-  }
-
-  .compact-player strong,
-  .compact-player p {
-    font-size: 0.68rem;
   }
 
   .toast {

@@ -73,17 +73,17 @@
             </div>
           </div>
 
-          <section class="panel inset challenge-panel hidden" id="challenge-panel">
-            <div class="challenge-copy">
+          <section class="panel inset vote-panel hidden" id="vote-panel">
+            <div class="vote-copy">
               <p class="eyebrow">Game Paused</p>
-              <h3 id="challenge-title">Challenge open</h3>
-              <p id="challenge-description">Vote to keep or revert the stolen word.</p>
+              <h3 id="vote-title">Vote open</h3>
+              <p id="vote-description">Vote to continue.</p>
             </div>
-            <div class="challenge-actions" id="challenge-actions">
-              <button id="vote-keep" class="secondary" type="button">Keep word</button>
-              <button id="vote-revert" class="danger" type="button">Revert word</button>
+            <div class="vote-actions">
+              <button id="vote-approve" class="secondary" type="button">Approve</button>
+              <button id="vote-reject" class="danger" type="button">Reject</button>
             </div>
-            <div class="vote-list" id="challenge-votes"></div>
+            <div class="vote-list" id="vote-list"></div>
           </section>
 
           <section class="board">
@@ -92,41 +92,29 @@
                 <h3>Middle tiles</h3>
                 <button id="flip-tile" type="button">Flip tile</button>
               </div>
-              <div class="middle-layout">
-                <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
-                <aside class="compact-word-rail">
-                  <p class="eyebrow">Live words</p>
-                  <div id="compact-words" class="compact-words"></div>
-                </aside>
+              <div class="compact-word-strip">
+                <p class="eyebrow">Stealable words</p>
+                <div id="compact-words" class="compact-words"></div>
               </div>
+              <div id="center-tiles" class="tile-rack empty">No tiles yet</div>
             </div>
 
-            <div class="panel inset">
+            <div class="panel inset play-panel">
               <div class="section-header">
-                <h3>Claim from the middle</h3>
+                <h3>Play a word</h3>
               </div>
-              <form id="claim-form" class="inline-form mobile-stack">
-                <input id="claim-word" placeholder="Type a word" autocomplete="off" autocapitalize="none" spellcheck="false" required>
-                <button type="submit">Claim</button>
-              </form>
-            </div>
-
-            <div class="panel inset">
-              <div class="section-header">
-                <h3>Steal a word</h3>
-              </div>
-              <form id="steal-form" class="stacked-form compact">
+              <form id="play-form" class="stacked-form compact">
                 <label>
-                  <span>Word to steal</span>
-                  <select id="steal-source" required></select>
+                  <span>Type the word</span>
+                  <input id="play-word" placeholder="fasten" autocomplete="off" autocapitalize="none" spellcheck="false" required>
                 </label>
                 <label>
-                  <span>New word</span>
-                  <input id="steal-word" placeholder="fasten" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+                  <span>Steal from (optional)</span>
+                  <select id="play-source"></select>
                 </label>
-                <button type="submit">Steal</button>
+                <button type="submit">Play word</button>
               </form>
-              <p class="hint">Claims and steals decide who flips next. If a steal is disputed, challenge it and the room votes before play resumes.</p>
+              <p class="hint">Leave the second field empty to claim from the middle. Choose a word there only when you are stealing.</p>
             </div>
           </section>
 
@@ -135,7 +123,7 @@
           <section class="panel inset final-panel" id="final-panel">
             <div>
               <h3>Finish round</h3>
-              <p id="final-copy">Resolve any challenges before you end the round.</p>
+              <p id="final-copy">Resolve any votes before you end the round.</p>
             </div>
             <button id="end-round" class="danger" type="button">End round</button>
           </section>

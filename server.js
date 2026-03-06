@@ -105,10 +105,6 @@ function hasAvailableCounts(requiredCounts, poolLetters) {
   return true;
 }
 
-function canTakeFromPool(word, poolLetters) {
-  return hasAvailableCounts(countLetters(word), poolLetters);
-}
-
 function subtractCounts(totalCounts, removeCounts) {
   const remaining = Object.assign(Object.create(null), totalCounts);
   for (const [letter, count] of Object.entries(removeCounts)) {
@@ -234,7 +230,7 @@ function createRoom(playerId, name) {
     updatedAt: Date.now(),
     clients: new Set(),
     currentTurnPlayerId: null,
-    pendingChallenge: null,
+    pendingVote: null,
     eventSeq: 0,
     lastEvent: { id: 0, type: 'room_created', actorId: null, actorName: null },
     lastAction: 'Room created.'
@@ -282,9 +278,9 @@ function ensureRoundOpen(room) {
   }
 }
 
-function ensureNoPendingChallenge(room) {
-  if (room.pendingChallenge) {
-    throw badRequest('Finish the challenge vote first.');
+function ensureNoPendingVote(room) {
+  if (room.pendingVote) {
+    throw badRequest('Finish the vote first.');
   }
 }
 
@@ -305,26 +301,330 @@ function badRequest(message, statusCode = 400) {
   return error;
 }
 
-function serializePendingChallenge(room) {
-  if (!room.pendingChallenge) {
+function buildPlayProposal(room, rawWord, sourceWordId) {
+  const word = normalizeWord(rawWord);
+  if (!isValidWordShape(word)) {
+    throw badRequest('Words must be at least 4 letters and use only A-Z.');
+  }
+
+  if (!sourceWordId) {
+    const countsToRemove = countLetters(word);
+    if (!hasAvailableCounts(countsToRemove, room.centerTiles)) {
+      throw badRequest('Those letters are not all available in the middle.');
+    }
+    return {
+      mode: 'claim',
+      word,
+      countsToRemove
+    };
+  }
+
+  const source = room.words.find((entry) => entry.id === sourceWordId);
+  if (!source) {
+    throw badRequest('Source word not found.');
+  }
+  if (word.length <= source.text.length) {
+    throw badRequest('A steal must make the word longer.');
+  }
+
+  const sourceCounts = countLetters(source.text);
+  const newCounts = countLetters(word);
+  const extraCounts = subtractCounts(newCounts, sourceCounts);
+
+  if (!extraCounts) {
+    throw badRequest('You cannot remove letters from an existing word.');
+  }
+  if (sumCounts(extraCounts) < 1) {
+    throw badRequest('A steal must add at least one tile from the middle.');
+  }
+  if (!hasAvailableCounts(extraCounts, room.centerTiles)) {
+    throw badRequest('The extra letters are not all available in the middle.');
+  }
+
+  return {
+    mode: 'steal',
+    word,
+    sourceWordId,
+    extraCounts
+  };
+}
+
+function applyPlayProposal(room, player, proposal, approvedByVote = false) {
+  if (proposal.mode === 'claim') {
+    removeLettersFromCenter(room, proposal.countsToRemove);
+    room.words.push({
+      id: crypto.randomUUID(),
+      text: proposal.word,
+      ownerId: player.id,
+      createdAt: Date.now(),
+      stealHistory: []
+    });
+  } else {
+    const source = room.words.find((entry) => entry.id === proposal.sourceWordId);
+    if (!source) {
+      throw badRequest('Source word not found.');
+    }
+    const previousTurnPlayerId = room.currentTurnPlayerId;
+    removeLettersFromCenter(room, proposal.extraCounts);
+    source.stealHistory = source.stealHistory || [];
+    source.stealHistory.push({
+      previousText: source.text,
+      previousOwnerId: source.ownerId,
+      previousTurnPlayerId,
+      addedCounts: copyCounts(proposal.extraCounts),
+      createdAt: Date.now()
+    });
+    source.text = proposal.word;
+    source.ownerId = player.id;
+  }
+
+  setCurrentTurn(room, player.id);
+  const verb = proposal.mode === 'claim' ? 'claimed' : 'stole';
+  room.lastAction = approvedByVote
+    ? `Vote complete. ${player.name} ${verb} ${proposal.word.toUpperCase()}. ${player.name} flips next.`
+    : `${player.name} ${verb} ${proposal.word.toUpperCase()}. ${player.name} flips next.`;
+  setRoomEvent(room, proposal.mode, player, {
+    word: proposal.word,
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    approvedByVote
+  });
+}
+
+function openUnknownWordVote(room, player, proposal) {
+  room.pendingVote = {
+    id: crypto.randomUUID(),
+    kind: 'word',
+    wordText: proposal.word,
+    proposerId: player.id,
+    proposerName: player.name,
+    eligiblePlayerIds: getTurnOrder(room).map((entry) => entry.id),
+    votes: {},
+    proposal
+  };
+  room.lastAction = `${player.name} says ${proposal.word.toUpperCase()} is a real word. Vote to allow it.`;
+  setRoomEvent(room, 'word_vote_opened', player, {
+    word: proposal.word,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+}
+
+function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  ensureNoPendingVote(room);
+  const proposal = buildPlayProposal(room, rawWord, sourceWordId);
+
+  if (!DICTIONARY.has(proposal.word)) {
+    openUnknownWordVote(room, player, proposal);
+    broadcastRoom(room, requestUrl);
+    return;
+  }
+
+  applyPlayProposal(room, player, proposal, false);
+  broadcastRoom(room, requestUrl);
+}
+
+function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  ensureNoPendingVote(room);
+  const source = room.words.find((entry) => entry.id === sourceWordId);
+
+  if (!source) {
+    throw badRequest('Word not found.');
+  }
+  if (!source.stealHistory || !source.stealHistory.length) {
+    throw badRequest('That word has no steal to challenge.');
+  }
+
+  room.pendingVote = {
+    id: crypto.randomUUID(),
+    kind: 'challenge',
+    wordId: source.id,
+    wordText: source.text,
+    ownerId: source.ownerId,
+    ownerName: room.players.get(source.ownerId)?.name || 'Unknown',
+    proposerId: player.id,
+    proposerName: player.name,
+    eligiblePlayerIds: getTurnOrder(room).map((entry) => entry.id),
+    votes: {}
+  };
+  room.lastAction = `${player.name} challenged ${source.text.toUpperCase()}. Voting is open.`;
+  setRoomEvent(room, 'challenge_opened', player, {
+    word: source.text,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+  broadcastRoom(room, requestUrl);
+}
+
+function revertLatestSteal(room, source) {
+  const lastSteal = source.stealHistory.pop();
+  addLettersToCenter(room, lastSteal.addedCounts);
+  source.text = lastSteal.previousText;
+  source.ownerId = lastSteal.previousOwnerId;
+  return lastSteal;
+}
+
+function resolvePendingVote(room, actor) {
+  const pendingVote = room.pendingVote;
+  const approveVotes = Object.values(pendingVote.votes).filter((vote) => vote === 'approve').length;
+  const rejectVotes = Object.values(pendingVote.votes).filter((vote) => vote === 'reject').length;
+
+  if (pendingVote.kind === 'challenge') {
+    const source = room.words.find((entry) => entry.id === pendingVote.wordId);
+    if (!source || !source.stealHistory || !source.stealHistory.length) {
+      room.pendingVote = null;
+      throw badRequest('The challenged word can no longer be resolved.');
+    }
+
+    if (approveVotes > rejectVotes) {
+      room.lastAction = `Vote complete. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
+      setRoomEvent(room, 'challenge_resolved_keep', actor, {
+        word: source.text,
+        currentTurnPlayerId: room.currentTurnPlayerId
+      });
+    } else {
+      const reverted = revertLatestSteal(room, source);
+      setCurrentTurn(room, reverted.previousTurnPlayerId || source.ownerId);
+      room.lastAction = `Vote complete. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
+      setRoomEvent(room, 'challenge_resolved_revert', actor, {
+        word: source.text,
+        currentTurnPlayerId: room.currentTurnPlayerId
+      });
+    }
+    room.pendingVote = null;
+    return;
+  }
+
+  if (approveVotes > rejectVotes) {
+    const proposer = room.players.get(pendingVote.proposerId);
+    if (!proposer) {
+      room.pendingVote = null;
+      throw badRequest('The proposed play can no longer be resolved.');
+    }
+    const proposal = pendingVote.proposal;
+    room.pendingVote = null;
+    applyPlayProposal(room, proposer, proposal, true);
+    return;
+  }
+
+  room.lastAction = `Vote complete. ${pendingVote.wordText.toUpperCase()} was rejected.`;
+  setRoomEvent(room, 'word_vote_rejected', actor, {
+    word: pendingVote.wordText,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+  room.pendingVote = null;
+}
+
+function vote(room, playerId, decision, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  if (!room.pendingVote) {
+    throw badRequest('There is no active vote.');
+  }
+  if (!room.pendingVote.eligiblePlayerIds.includes(playerId)) {
+    throw badRequest('You are not part of this vote.');
+  }
+  if (!['approve', 'reject'].includes(decision)) {
+    throw badRequest('Vote must be approve or reject.');
+  }
+
+  room.pendingVote.votes[playerId] = decision;
+  const everyoneVoted = room.pendingVote.eligiblePlayerIds.every((id) => room.pendingVote.votes[id]);
+
+  if (everyoneVoted) {
+    resolvePendingVote(room, player);
+    broadcastRoom(room, requestUrl);
+    return;
+  }
+
+  const waitingOn = room.pendingVote.eligiblePlayerIds
+    .filter((id) => !room.pendingVote.votes[id])
+    .map((id) => room.players.get(id)?.name || 'Unknown');
+
+  room.lastAction = `${player.name} voted. Waiting on ${waitingOn.join(', ')}.`;
+  setRoomEvent(room, 'vote_update', player, {
+    word: room.pendingVote.wordText,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+  broadcastRoom(room, requestUrl);
+}
+
+function flipTile(room, playerId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  ensureNoPendingVote(room);
+  ensureFlipTurn(room, playerId);
+  if (!room.bag.length) {
+    throw badRequest('No tiles are left to flip.');
+  }
+
+  const tile = room.bag.pop();
+  room.centerTiles.push(tile);
+  room.currentTurnPlayerId = getNextTurnPlayerId(room, playerId);
+  const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
+  room.lastAction = `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
+  setRoomEvent(room, 'flip', player, {
+    tile,
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    nextTurnPlayerName: nextPlayerName
+  });
+  broadcastRoom(room, requestUrl);
+}
+
+function endRound(room, playerId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  ensureNoPendingVote(room);
+  if (room.bag.length > 0) {
+    throw badRequest('You can only end the round after the bag is empty.');
+  }
+
+  room.ended = true;
+  room.lastAction = `${player.name} ended the round.`;
+  setRoomEvent(room, 'end', player, { currentTurnPlayerId: room.currentTurnPlayerId });
+  broadcastRoom(room, requestUrl);
+}
+
+function serializePendingVote(room) {
+  if (!room.pendingVote) {
     return null;
   }
-  const keepVotes = Object.values(room.pendingChallenge.votes).filter((vote) => vote === 'keep').length;
-  const revertVotes = Object.values(room.pendingChallenge.votes).filter((vote) => vote === 'revert').length;
+
+  const approveVotes = Object.values(room.pendingVote.votes).filter((vote) => vote === 'approve').length;
+  const rejectVotes = Object.values(room.pendingVote.votes).filter((vote) => vote === 'reject').length;
+
+  if (room.pendingVote.kind === 'challenge') {
+    return {
+      kind: 'challenge',
+      wordText: room.pendingVote.wordText,
+      title: `Challenge on ${room.pendingVote.wordText.toUpperCase()}`,
+      description: `${room.pendingVote.proposerName} challenged ${room.pendingVote.ownerName}'s word. Vote to keep it or revert it.`,
+      approveLabel: 'Keep word',
+      rejectLabel: 'Revert word',
+      approveVotes,
+      rejectVotes,
+      votes: room.pendingVote.eligiblePlayerIds.map((playerId) => ({
+        playerId,
+        playerName: room.players.get(playerId)?.name || 'Unknown',
+        decision: room.pendingVote.votes[playerId] || null
+      }))
+    };
+  }
+
   return {
-    id: room.pendingChallenge.id,
-    wordId: room.pendingChallenge.wordId,
-    wordText: room.pendingChallenge.wordText,
-    ownerId: room.pendingChallenge.ownerId,
-    ownerName: room.players.get(room.pendingChallenge.ownerId)?.name || room.pendingChallenge.ownerName,
-    challengerId: room.pendingChallenge.challengerId,
-    challengerName: room.players.get(room.pendingChallenge.challengerId)?.name || room.pendingChallenge.challengerName,
-    keepVotes,
-    revertVotes,
-    votes: room.pendingChallenge.eligiblePlayerIds.map((playerId) => ({
+    kind: 'word',
+    wordText: room.pendingVote.wordText,
+    title: `Vote on ${room.pendingVote.wordText.toUpperCase()}`,
+    description: `${room.pendingVote.proposerName} says ${room.pendingVote.wordText.toUpperCase()} is a real word. Vote to allow it or reject it.`,
+    approveLabel: 'Allow word',
+    rejectLabel: 'Reject word',
+    approveVotes,
+    rejectVotes,
+    votes: room.pendingVote.eligiblePlayerIds.map((playerId) => ({
       playerId,
       playerName: room.players.get(playerId)?.name || 'Unknown',
-      decision: room.pendingChallenge.votes[playerId] || null
+      decision: room.pendingVote.votes[playerId] || null
     }))
   };
 }
@@ -343,7 +643,7 @@ function serializeRoom(room, requestUrl) {
       text: word.text,
       score: scoreWord(word.text),
       ownerId: word.ownerId,
-      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingChallenge
+      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingVote
     });
   }
 
@@ -371,11 +671,11 @@ function serializeRoom(room, requestUrl) {
       text: word.text,
       ownerId: word.ownerId,
       ownerName: room.players.get(word.ownerId)?.name || 'Unknown',
-      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingChallenge
+      canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingVote
     })),
     currentTurnPlayerId: room.currentTurnPlayerId,
-    currentTurnPlayerName: room.pendingChallenge ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
-    pendingChallenge: serializePendingChallenge(room),
+    currentTurnPlayerName: room.pendingVote ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
+    pendingVote: serializePendingVote(room),
     ended: room.ended,
     lastAction: room.lastAction,
     lastEvent: room.lastEvent,
@@ -390,231 +690,6 @@ function broadcastRoom(room, requestUrl) {
   for (const client of room.clients) {
     client.write(payload);
   }
-}
-
-function claimWord(room, playerId, rawWord, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  ensureNoPendingChallenge(room);
-  const word = normalizeWord(rawWord);
-
-  if (!isValidWordShape(word)) {
-    throw badRequest('Words must be at least 4 letters and use only A-Z.');
-  }
-  if (!DICTIONARY.has(word)) {
-    throw badRequest('That word is not in the game dictionary.');
-  }
-  if (!canTakeFromPool(word, room.centerTiles)) {
-    throw badRequest('Those letters are not all available in the middle.');
-  }
-
-  removeLettersFromCenter(room, countLetters(word));
-  room.words.push({
-    id: crypto.randomUUID(),
-    text: word,
-    ownerId: playerId,
-    createdAt: Date.now(),
-    stealHistory: []
-  });
-  setCurrentTurn(room, playerId);
-  room.lastAction = `${player.name} claimed ${word.toUpperCase()}. ${player.name} flips next.`;
-  setRoomEvent(room, 'claim', player, { word, currentTurnPlayerId: room.currentTurnPlayerId });
-  broadcastRoom(room, requestUrl);
-}
-
-function stealWord(room, playerId, sourceWordId, rawWord, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  ensureNoPendingChallenge(room);
-  const word = normalizeWord(rawWord);
-  const source = room.words.find((entry) => entry.id === sourceWordId);
-
-  if (!source) {
-    throw badRequest('Source word not found.');
-  }
-  if (!isValidWordShape(word)) {
-    throw badRequest('Words must be at least 4 letters and use only A-Z.');
-  }
-  if (!DICTIONARY.has(word)) {
-    throw badRequest('That word is not in the game dictionary.');
-  }
-  if (word.length <= source.text.length) {
-    throw badRequest('A steal must make the word longer.');
-  }
-
-  const sourceCounts = countLetters(source.text);
-  const newCounts = countLetters(word);
-  const extraCounts = subtractCounts(newCounts, sourceCounts);
-
-  if (!extraCounts) {
-    throw badRequest('You cannot remove letters from an existing word.');
-  }
-  if (sumCounts(extraCounts) < 1) {
-    throw badRequest('A steal must add at least one tile from the middle.');
-  }
-  if (!hasAvailableCounts(extraCounts, room.centerTiles)) {
-    throw badRequest('The extra letters are not all available in the middle.');
-  }
-
-  const previousTurnPlayerId = room.currentTurnPlayerId;
-  removeLettersFromCenter(room, extraCounts);
-  source.stealHistory = source.stealHistory || [];
-  source.stealHistory.push({
-    previousText: source.text,
-    previousOwnerId: source.ownerId,
-    previousTurnPlayerId,
-    addedCounts: copyCounts(extraCounts),
-    createdAt: Date.now()
-  });
-  source.text = word;
-  source.ownerId = playerId;
-  setCurrentTurn(room, playerId);
-  room.lastAction = `${player.name} stole ${word.toUpperCase()}. ${player.name} flips next.`;
-  setRoomEvent(room, 'steal', player, { word, currentTurnPlayerId: room.currentTurnPlayerId });
-  broadcastRoom(room, requestUrl);
-}
-
-function challengeWord(room, playerId, sourceWordId, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  ensureNoPendingChallenge(room);
-  const source = room.words.find((entry) => entry.id === sourceWordId);
-
-  if (!source) {
-    throw badRequest('Word not found.');
-  }
-  if (!source.stealHistory || !source.stealHistory.length) {
-    throw badRequest('That word has no steal to challenge.');
-  }
-
-  const eligiblePlayerIds = getTurnOrder(room).map((entry) => entry.id);
-  room.pendingChallenge = {
-    id: crypto.randomUUID(),
-    wordId: source.id,
-    wordText: source.text,
-    ownerId: source.ownerId,
-    ownerName: room.players.get(source.ownerId)?.name || 'Unknown',
-    challengerId: player.id,
-    challengerName: player.name,
-    eligiblePlayerIds,
-    votes: {},
-    openedAt: Date.now()
-  };
-  room.lastAction = `${player.name} challenged ${source.text.toUpperCase()}. Voting is open.`;
-  setRoomEvent(room, 'challenge_opened', player, {
-    word: source.text,
-    challengeId: room.pendingChallenge.id,
-    currentTurnPlayerId: room.currentTurnPlayerId
-  });
-  broadcastRoom(room, requestUrl);
-}
-
-function revertLatestSteal(room, source) {
-  const lastSteal = source.stealHistory.pop();
-  addLettersToCenter(room, lastSteal.addedCounts);
-  source.text = lastSteal.previousText;
-  source.ownerId = lastSteal.previousOwnerId;
-  return lastSteal;
-}
-
-function resolveChallenge(room, actor, requestUrl) {
-  const challenge = room.pendingChallenge;
-  const source = room.words.find((entry) => entry.id === challenge.wordId);
-  if (!source || !source.stealHistory || !source.stealHistory.length) {
-    room.pendingChallenge = null;
-    throw badRequest('The challenged word can no longer be resolved.');
-  }
-
-  const keepVotes = Object.values(challenge.votes).filter((vote) => vote === 'keep').length;
-  const revertVotes = Object.values(challenge.votes).filter((vote) => vote === 'revert').length;
-
-  if (keepVotes > revertVotes) {
-    room.lastAction = `Vote complete. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
-    setRoomEvent(room, 'challenge_resolved_keep', actor, {
-      word: source.text,
-      currentTurnPlayerId: room.currentTurnPlayerId
-    });
-  } else {
-    const reverted = revertLatestSteal(room, source);
-    setCurrentTurn(room, reverted.previousTurnPlayerId || source.ownerId);
-    room.lastAction = `Vote complete. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
-    setRoomEvent(room, 'challenge_resolved_revert', actor, {
-      word: source.text,
-      currentTurnPlayerId: room.currentTurnPlayerId
-    });
-  }
-
-  room.pendingChallenge = null;
-  broadcastRoom(room, requestUrl);
-}
-
-function voteChallenge(room, playerId, decision, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  if (!room.pendingChallenge) {
-    throw badRequest('There is no active challenge to vote on.');
-  }
-  if (!room.pendingChallenge.eligiblePlayerIds.includes(playerId)) {
-    throw badRequest('You are not part of this challenge vote.');
-  }
-  if (!['keep', 'revert'].includes(decision)) {
-    throw badRequest('Vote must be keep or revert.');
-  }
-
-  room.pendingChallenge.votes[playerId] = decision;
-  const everyoneVoted = room.pendingChallenge.eligiblePlayerIds.every((id) => room.pendingChallenge.votes[id]);
-
-  if (everyoneVoted) {
-    resolveChallenge(room, player, requestUrl);
-    return;
-  }
-
-  const waitingOn = room.pendingChallenge.eligiblePlayerIds
-    .filter((id) => !room.pendingChallenge.votes[id])
-    .map((id) => room.players.get(id)?.name || 'Unknown');
-
-  room.lastAction = `${player.name} voted. Waiting on ${waitingOn.join(', ')}.`;
-  setRoomEvent(room, 'challenge_vote', player, {
-    word: room.pendingChallenge.wordText,
-    currentTurnPlayerId: room.currentTurnPlayerId
-  });
-  broadcastRoom(room, requestUrl);
-}
-
-function flipTile(room, playerId, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  ensureNoPendingChallenge(room);
-  ensureFlipTurn(room, playerId);
-  if (!room.bag.length) {
-    throw badRequest('No tiles are left to flip.');
-  }
-
-  const tile = room.bag.pop();
-  room.centerTiles.push(tile);
-  room.currentTurnPlayerId = getNextTurnPlayerId(room, playerId);
-  const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
-  room.lastAction = `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
-  setRoomEvent(room, 'flip', player, {
-    tile,
-    currentTurnPlayerId: room.currentTurnPlayerId,
-    nextTurnPlayerName: nextPlayerName
-  });
-  broadcastRoom(room, requestUrl);
-}
-
-function endRound(room, playerId, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-  ensureNoPendingChallenge(room);
-  if (room.bag.length > 0) {
-    throw badRequest('You can only end the round after the bag is empty.');
-  }
-
-  room.ended = true;
-  room.lastAction = `${player.name} ended the round.`;
-  setRoomEvent(room, 'end', player, { currentTurnPlayerId: room.currentTurnPlayerId });
-  broadcastRoom(room, requestUrl);
 }
 
 function parseJsonBody(request) {
@@ -717,7 +792,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|claim|steal|challenge|vote|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -764,26 +839,20 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
-      if (request.method === 'POST' && action === 'claim') {
-        claimWord(room, playerId, body.word, requestUrl);
-        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
-        return;
-      }
-
-      if (request.method === 'POST' && action === 'steal') {
-        stealWord(room, playerId, body.sourceWordId, body.word, requestUrl);
+      if (request.method === 'POST' && action === 'play') {
+        claimOrStealWord(room, playerId, body.word, body.sourceWordId || '', requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'challenge') {
-        challengeWord(room, playerId, body.sourceWordId, requestUrl);
+        openChallengeVote(room, playerId, body.sourceWordId, requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'vote') {
-        voteChallenge(room, playerId, body.decision, requestUrl);
+        vote(room, playerId, body.decision, requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
@@ -817,10 +886,9 @@ module.exports = {
   DICTIONARY,
   createRoom,
   joinRoom,
-  claimWord,
-  stealWord,
-  challengeWord,
-  voteChallenge,
+  claimOrStealWord,
+  openChallengeVote,
+  vote,
   flipTile,
   endRound,
   serializeRoom

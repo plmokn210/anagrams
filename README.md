@@ -5,9 +5,9 @@ A simple realtime browser version of your tile-flip anagrams game.
 ## What it does
 - Create a private room and share the link.
 - Flip one tile at a time into the middle.
-- Claim a word from the center once you see one.
-- Steal a word by adding letters from the center.
-- Open a room-wide challenge vote on a disputed steal.
+- Play a word from one form, whether you are claiming from the middle or stealing.
+- Challenge a disputed steal with a room vote.
+- Vote on unknown words instead of rejecting them immediately.
 - Track live scores using your house rule: each word scores `length - 3`.
 - Play with turn-based flipping: whoever most recently claimed or stole gets the next flip, then flips rotate around the table order.
 - Hear a sound when a tile is flipped and a different sound when someone steals.
@@ -19,7 +19,8 @@ A simple realtime browser version of your tile-flip anagrams game.
 - A steal must add at least one middle tile.
 - Claims and steals reset who gets the next flip.
 - A challenge pauses the room and opens a vote.
-- If the vote ties or loses, the stolen word is reverted.
+- Unknown words can also go to a vote.
+- If a vote ties or loses, the challenged or unknown word is rejected.
 - The app does not try to decide English roots automatically.
 
 ## Run locally
@@ -46,5 +47,5 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## Notes
 - Room state is stored in server memory, which is fine for a quick two-player game.
 - If the server restarts, active rooms are lost.
-- The bundled dictionary comes from a filtered system word list so hosted validation behaves the same way.
+- The bundled dictionary now includes both `web2` and `web2a`, filtered against proper names.
 - Browser sound requires at least one tap or keypress in the page before the browser will play audio.

@@ -24,18 +24,16 @@ const elements = {
   centerTiles: document.querySelector('#center-tiles'),
   compactWords: document.querySelector('#compact-words'),
   flipTile: document.querySelector('#flip-tile'),
-  claimForm: document.querySelector('#claim-form'),
-  claimWord: document.querySelector('#claim-word'),
-  stealForm: document.querySelector('#steal-form'),
-  stealSource: document.querySelector('#steal-source'),
-  stealWord: document.querySelector('#steal-word'),
+  playForm: document.querySelector('#play-form'),
+  playWord: document.querySelector('#play-word'),
+  playSource: document.querySelector('#play-source'),
   playersGrid: document.querySelector('#players-grid'),
-  challengePanel: document.querySelector('#challenge-panel'),
-  challengeTitle: document.querySelector('#challenge-title'),
-  challengeDescription: document.querySelector('#challenge-description'),
-  challengeVotes: document.querySelector('#challenge-votes'),
-  voteKeep: document.querySelector('#vote-keep'),
-  voteRevert: document.querySelector('#vote-revert'),
+  votePanel: document.querySelector('#vote-panel'),
+  voteTitle: document.querySelector('#vote-title'),
+  voteDescription: document.querySelector('#vote-description'),
+  voteList: document.querySelector('#vote-list'),
+  voteApprove: document.querySelector('#vote-approve'),
+  voteReject: document.querySelector('#vote-reject'),
   soundToggle: document.querySelector('#sound-toggle'),
   copyLink: document.querySelector('#copy-link'),
   leaveRoom: document.querySelector('#leave-room'),
@@ -221,7 +219,7 @@ function renderPlayers(room) {
   elements.playersGrid.innerHTML = room.players.map((player) => {
     const words = player.words.length
       ? player.words.map((word) => {
-        const challengeButton = word.canChallenge && !room.ended && !room.pendingChallenge
+        const challengeButton = word.canChallenge && !room.ended && !room.pendingVote
           ? `<button class="pill-action" data-action="challenge" data-word-id="${word.id}" type="button">Challenge</button>`
           : '';
 
@@ -250,12 +248,12 @@ function renderPlayers(room) {
   }).join('');
 }
 
-function renderStealOptions(words) {
-  const options = ['<option value="">Choose a word</option>'];
+function renderPlayOptions(words) {
+  const options = ['<option value="">Claim from middle</option>'];
   for (const word of words) {
     options.push(`<option value="${word.id}">${word.text.toUpperCase()} · ${word.ownerName}</option>`);
   }
-  elements.stealSource.innerHTML = options.join('');
+  elements.playSource.innerHTML = options.join('');
 }
 
 function renderTurnState(room) {
@@ -264,7 +262,7 @@ function renderTurnState(room) {
     elements.flipTile.textContent = 'Flip tile';
     return;
   }
-  if (room.pendingChallenge) {
+  if (room.pendingVote) {
     elements.turnIndicator.textContent = 'Vote pending';
     elements.flipTile.textContent = 'Vote pending';
     return;
@@ -275,25 +273,28 @@ function renderTurnState(room) {
   elements.flipTile.textContent = isYourTurn ? 'Flip tile' : `${room.currentTurnPlayerName || 'Waiting'} is up`;
 }
 
-function renderChallenge(room) {
-  const challenge = room.pendingChallenge;
-  if (!challenge) {
-    elements.challengePanel.classList.add('hidden');
+function renderVotePanel(room) {
+  const pendingVote = room.pendingVote;
+  if (!pendingVote) {
+    elements.votePanel.classList.add('hidden');
     return;
   }
 
-  elements.challengePanel.classList.remove('hidden');
-  elements.challengeTitle.textContent = `Challenge on ${challenge.wordText.toUpperCase()}`;
-  elements.challengeDescription.textContent = `${challenge.challengerName} challenged ${challenge.ownerName}'s word. Everyone votes before play resumes.`;
+  elements.votePanel.classList.remove('hidden');
+  elements.voteTitle.textContent = pendingVote.title;
+  elements.voteDescription.textContent = pendingVote.description;
 
-  const myVote = challenge.votes.find((vote) => vote.playerId === state.playerId)?.decision || null;
-  elements.voteKeep.disabled = false;
-  elements.voteRevert.disabled = false;
-  elements.voteKeep.classList.toggle('selected', myVote === 'keep');
-  elements.voteRevert.classList.toggle('selected', myVote === 'revert');
+  const myVote = pendingVote.votes.find((vote) => vote.playerId === state.playerId)?.decision || null;
+  const canVote = pendingVote.votes.some((vote) => vote.playerId === state.playerId);
+  elements.voteApprove.textContent = pendingVote.approveLabel;
+  elements.voteReject.textContent = pendingVote.rejectLabel;
+  elements.voteApprove.disabled = !canVote;
+  elements.voteReject.disabled = !canVote;
+  elements.voteApprove.classList.toggle('selected', myVote === 'approve');
+  elements.voteReject.classList.toggle('selected', myVote === 'reject');
 
-  elements.challengeVotes.innerHTML = challenge.votes.map((vote) => {
-    const label = vote.decision ? (vote.decision === 'keep' ? 'keep' : 'revert') : 'waiting';
+  elements.voteList.innerHTML = pendingVote.votes.map((vote) => {
+    const label = vote.decision ? vote.decision : 'waiting';
     return `
       <div class="vote-row ${vote.decision ? 'voted' : 'pending'}">
         <span>${vote.playerName}${vote.playerId === state.playerId ? ' (You)' : ''}</span>
@@ -305,7 +306,7 @@ function renderChallenge(room) {
 
 function renderFinalPanel(room) {
   const bagEmpty = room.bagRemaining === 0;
-  elements.endRound.disabled = !bagEmpty || room.ended || Boolean(room.pendingChallenge);
+  elements.endRound.disabled = !bagEmpty || room.ended || Boolean(room.pendingVote);
 
   if (room.ended) {
     const winnerCopy = room.winners.length > 1
@@ -314,12 +315,12 @@ function renderFinalPanel(room) {
     elements.finalCopy.textContent = winnerCopy;
     return;
   }
-  if (room.pendingChallenge) {
-    elements.finalCopy.textContent = 'Voting is open. Finish the challenge before ending the round.';
+  if (room.pendingVote) {
+    elements.finalCopy.textContent = 'Voting is open. Finish the vote before ending the round.';
     return;
   }
-  if (bagEmpty) {
-    elements.finalCopy.textContent = 'The bag is empty. Resolve any challenges, then end the round when ready.';
+  if (room.bagRemaining === 0) {
+    elements.finalCopy.textContent = 'The bag is empty. Resolve any votes, then end the round when ready.';
   } else {
     elements.finalCopy.textContent = 'Claims and steals reset who gets the next flip.';
   }
@@ -332,23 +333,21 @@ function renderRoom() {
   }
 
   const isYourTurn = room.currentTurnPlayerId === state.playerId;
-  const pausedForChallenge = Boolean(room.pendingChallenge);
+  const pausedForVote = Boolean(room.pendingVote);
 
   elements.roomCode.textContent = room.code;
   elements.bagCount.textContent = String(room.bagRemaining);
   elements.lastAction.textContent = room.lastAction || 'Waiting for the next move.';
-  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn || pausedForChallenge;
-  elements.claimWord.disabled = room.ended || pausedForChallenge;
-  elements.stealSource.disabled = room.ended || pausedForChallenge;
-  elements.stealWord.disabled = room.ended || pausedForChallenge;
-  elements.claimForm.querySelector('button').disabled = room.ended || pausedForChallenge;
-  elements.stealForm.querySelector('button').disabled = room.ended || pausedForChallenge;
+  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn || pausedForVote;
+  elements.playWord.disabled = room.ended || pausedForVote;
+  elements.playSource.disabled = room.ended || pausedForVote;
+  elements.playForm.querySelector('button').disabled = room.ended || pausedForVote;
   renderTurnState(room);
   renderTiles(room.centerTiles);
   renderCompactWords(room);
   renderPlayers(room);
-  renderStealOptions(room.allWords);
-  renderChallenge(room);
+  renderPlayOptions(room.allWords);
+  renderVotePanel(room);
   renderFinalPanel(room);
   renderSoundToggle();
 }
@@ -361,7 +360,7 @@ function applyRoomUpdate(room, allowEffects) {
     && previousRoom.currentTurnPlayerId !== state.playerId
     && room.currentTurnPlayerId === state.playerId
     && !room.ended
-    && !room.pendingChallenge
+    && !room.pendingVote
     && room.bagRemaining > 0;
 
   state.room = room;
@@ -377,10 +376,10 @@ function applyRoomUpdate(room, allowEffects) {
   if (room.lastEvent?.type === 'steal') {
     playStealSound();
   }
-  if (room.lastEvent?.type === 'challenge_opened') {
-    showToast('Challenge opened. Vote to continue.', 2200);
+  if (room.lastEvent?.type === 'challenge_opened' || room.lastEvent?.type === 'word_vote_opened') {
+    showToast('Vote opened. Everyone needs to vote.', 2200);
   }
-  if (room.lastEvent?.type === 'challenge_resolved_keep' || room.lastEvent?.type === 'challenge_resolved_revert') {
+  if (room.lastEvent?.type === 'challenge_resolved_keep' || room.lastEvent?.type === 'challenge_resolved_revert' || room.lastEvent?.type === 'word_vote_rejected' || room.lastEvent?.approvedByVote) {
     showToast('Vote finished. Game resumed.', 1800);
   }
   if (becameYourTurn) {
@@ -461,32 +460,19 @@ elements.flipTile.addEventListener('click', async () => {
   }
 });
 
-elements.claimForm.addEventListener('submit', async (event) => {
+elements.playForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const word = elements.claimWord.value.trim();
+  const word = elements.playWord.value.trim();
   if (!word) {
     return;
   }
   try {
-    await sendAction('claim', { word });
-    elements.claimWord.value = '';
-  } catch (error) {
-    showToast(error.message);
-  }
-});
-
-elements.stealForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const sourceWordId = elements.stealSource.value;
-  const word = elements.stealWord.value.trim();
-  if (!sourceWordId || !word) {
-    showToast('Choose a word to steal and type the new word.');
-    return;
-  }
-  try {
-    await sendAction('steal', { sourceWordId, word });
-    elements.stealWord.value = '';
-    elements.stealSource.value = '';
+    await sendAction('play', {
+      word,
+      sourceWordId: elements.playSource.value || ''
+    });
+    elements.playWord.value = '';
+    elements.playSource.value = '';
   } catch (error) {
     showToast(error.message);
   }
@@ -505,17 +491,17 @@ elements.playersGrid.addEventListener('click', async (event) => {
   }
 });
 
-elements.voteKeep.addEventListener('click', async () => {
+elements.voteApprove.addEventListener('click', async () => {
   try {
-    await sendAction('vote', { decision: 'keep' });
+    await sendAction('vote', { decision: 'approve' });
   } catch (error) {
     showToast(error.message);
   }
 });
 
-elements.voteRevert.addEventListener('click', async () => {
+elements.voteReject.addEventListener('click', async () => {
   try {
-    await sendAction('vote', { decision: 'revert' });
+    await sendAction('vote', { decision: 'reject' });
   } catch (error) {
     showToast(error.message);
   }
