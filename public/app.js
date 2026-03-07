@@ -6,7 +6,10 @@ const state = {
   soundEnabled: localStorage.getItem('anagrams-sound-enabled') !== 'false',
   audioContext: null,
   shownJessRoomKey: null,
-  selectedSourceWordId: ''
+  selectedSourceWordId: '',
+  voteCountdownTimer: null,
+  lastVoteCountdownSecond: null,
+  currentVoteId: null
 };
 
 localStorage.setItem('anagrams-player-id', state.playerId);
@@ -37,6 +40,7 @@ const elements = {
   homeButton: document.querySelector('#home-button'),
   voteTitle: document.querySelector('#vote-title'),
   voteDescription: document.querySelector('#vote-description'),
+  voteTimer: document.querySelector('#vote-timer'),
   voteList: document.querySelector('#vote-list'),
   voteApprove: document.querySelector('#vote-approve'),
   voteReject: document.querySelector('#vote-reject'),
@@ -217,6 +221,20 @@ function playStealSound() {
   ]);
 }
 
+function playVoteTickSound(secondsLeft) {
+  const finalSecond = secondsLeft <= 1;
+  playToneSequence([
+    {
+      offset: 0,
+      duration: finalSecond ? 0.12 : 0.08,
+      frequency: finalSecond ? 520 : 780,
+      endFrequency: finalSecond ? 420 : 720,
+      gain: finalSecond ? 0.05 : 0.03,
+      type: finalSecond ? 'square' : 'triangle'
+    }
+  ]);
+}
+
 function renderSoundToggle() {
   elements.soundToggle.textContent = state.soundEnabled ? 'Sound on' : 'Sound off';
 }
@@ -255,6 +273,7 @@ function leaveRoom() {
     state.eventSource = null;
   }
   state.room = null;
+  clearVoteCountdown();
   hideChatFlash();
   elements.chatInput.value = '';
   setSelectedSourceWord('');
@@ -280,20 +299,14 @@ function renderTiles(tiles) {
 }
 
 function renderCompactWords(room) {
-  elements.compactWords.innerHTML = room.players.map((player) => {
-    const words = player.words.length
-      ? player.words.map((word) => {
-        const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
-        return `<button class="compact-word-chip${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()} · ${player.name}</button>`;
-      }).join('')
-      : '<p class="hint">none</p>';
-    return `
-      <article class="compact-player">
-        <strong>${player.name}${player.id === state.playerId ? ' (You)' : ''}</strong>
-        <div class="compact-player-words">${words}</div>
-      </article>
-    `;
-  }).join('');
+  const words = room.allWords.map((word) => {
+    const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
+    return `<button class="compact-word-chip${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()}</button>`;
+  });
+
+  elements.compactWords.innerHTML = words.length
+    ? words.join('')
+    : '<p class="hint">No words to steal yet.</p>';
 }
 
 function renderPlayers(room) {
@@ -359,16 +372,66 @@ function renderTurnState(room) {
   elements.flipTile.textContent = isYourTurn ? 'Flip tile' : `${room.currentTurnPlayerName || 'Waiting'} is up`;
 }
 
+function clearVoteCountdown() {
+  if (state.voteCountdownTimer) {
+    clearInterval(state.voteCountdownTimer);
+    state.voteCountdownTimer = null;
+  }
+  state.lastVoteCountdownSecond = null;
+  state.currentVoteId = null;
+}
+
+function updateVoteCountdown() {
+  const pendingVote = state.room?.pendingVote;
+  if (!pendingVote?.deadlineAt) {
+    elements.voteTimer.textContent = '';
+    clearVoteCountdown();
+    return;
+  }
+
+  const secondsLeft = Math.max(0, Math.ceil((pendingVote.deadlineAt - Date.now()) / 1000));
+  elements.voteTimer.textContent = `${secondsLeft} second${secondsLeft === 1 ? '' : 's'} left`;
+
+  if (state.lastVoteCountdownSecond !== null && secondsLeft < state.lastVoteCountdownSecond && secondsLeft > 0) {
+    playVoteTickSound(secondsLeft);
+  }
+
+  state.lastVoteCountdownSecond = secondsLeft;
+}
+
+function ensureVoteCountdown(pendingVote) {
+  if (!pendingVote?.deadlineAt) {
+    elements.voteTimer.textContent = '';
+    clearVoteCountdown();
+    return;
+  }
+
+  if (state.currentVoteId !== pendingVote.wordText + pendingVote.kind + pendingVote.deadlineAt) {
+    clearVoteCountdown();
+    state.currentVoteId = pendingVote.wordText + pendingVote.kind + pendingVote.deadlineAt;
+    state.lastVoteCountdownSecond = null;
+  }
+
+  updateVoteCountdown();
+
+  if (!state.voteCountdownTimer) {
+    state.voteCountdownTimer = window.setInterval(updateVoteCountdown, 200);
+  }
+}
+
 function renderVotePanel(room) {
   const pendingVote = room.pendingVote;
   if (!pendingVote) {
     elements.votePanel.classList.add('hidden');
+    elements.voteTimer.textContent = '';
+    clearVoteCountdown();
     return;
   }
 
   elements.votePanel.classList.remove('hidden');
   elements.voteTitle.textContent = pendingVote.title;
   elements.voteDescription.textContent = pendingVote.description;
+  ensureVoteCountdown(pendingVote);
 
   const myVote = pendingVote.votes.find((vote) => vote.playerId === state.playerId)?.decision || null;
   const canVote = pendingVote.votes.some((vote) => vote.playerId === state.playerId);
@@ -471,7 +534,7 @@ function applyRoomUpdate(room, allowEffects) {
     showToast('Vote opened. Everyone needs to vote.', 2200);
   }
   if (room.lastEvent?.type === 'challenge_resolved_keep' || room.lastEvent?.type === 'challenge_resolved_revert' || room.lastEvent?.type === 'word_vote_rejected' || room.lastEvent?.approvedByVote) {
-    showToast('Vote finished. Game resumed.', 1800);
+    showToast(room.lastEvent?.timedOut ? 'Vote timed out. Game resumed.' : 'Vote finished. Game resumed.', 1800);
   }
   if (becameYourTurn) {
     showToast('Your turn to flip.', 1800);
@@ -697,6 +760,7 @@ elements.endRound.addEventListener('click', async () => {
 window.addEventListener('pointerdown', unlockAudio, { passive: true });
 window.addEventListener('keydown', unlockAudio);
 window.addEventListener('beforeunload', () => {
+  clearVoteCountdown();
   if (state.eventSource) {
     state.eventSource.close();
   }
