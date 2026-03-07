@@ -87,6 +87,88 @@ function isValidWordShape(word) {
   return /^[a-z]{4,}$/.test(word);
 }
 
+function addInflectionCandidate(candidates, word) {
+  if (word && /^[a-z]{3,}$/.test(word)) {
+    candidates.add(word);
+  }
+}
+
+function getInflectionBases(word) {
+  const candidates = new Set();
+
+  if (word.endsWith('ies') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -3) + 'y');
+  }
+  if (word.endsWith('ves') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -3) + 'f');
+    addInflectionCandidate(candidates, word.slice(0, -3) + 'fe');
+  }
+  if (word.endsWith('es') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -2));
+    addInflectionCandidate(candidates, word.slice(0, -1));
+  }
+  if (word.endsWith('s') && !word.endsWith('ss') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -1));
+  }
+
+  if (word.endsWith('ied') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -3) + 'y');
+  }
+  if (word.endsWith('ed') && word.length > 4) {
+    const stem = word.slice(0, -2);
+    addInflectionCandidate(candidates, stem);
+    addInflectionCandidate(candidates, word.slice(0, -1));
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      addInflectionCandidate(candidates, stem.slice(0, -1));
+    }
+  }
+
+  if (word.endsWith('ying') && word.length > 5) {
+    addInflectionCandidate(candidates, word.slice(0, -4) + 'ie');
+  }
+  if (word.endsWith('ing') && word.length > 5) {
+    const stem = word.slice(0, -3);
+    addInflectionCandidate(candidates, stem);
+    addInflectionCandidate(candidates, stem + 'e');
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      addInflectionCandidate(candidates, stem.slice(0, -1));
+    }
+  }
+
+  if (word.endsWith('ier') && word.length > 4) {
+    addInflectionCandidate(candidates, word.slice(0, -3) + 'y');
+  }
+  if (word.endsWith('iest') && word.length > 5) {
+    addInflectionCandidate(candidates, word.slice(0, -4) + 'y');
+  }
+  if (word.endsWith('er') && word.length > 4) {
+    const stem = word.slice(0, -2);
+    addInflectionCandidate(candidates, stem);
+    addInflectionCandidate(candidates, stem + 'e');
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      addInflectionCandidate(candidates, stem.slice(0, -1));
+    }
+  }
+  if (word.endsWith('est') && word.length > 5) {
+    const stem = word.slice(0, -3);
+    addInflectionCandidate(candidates, stem);
+    addInflectionCandidate(candidates, stem + 'e');
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      addInflectionCandidate(candidates, stem.slice(0, -1));
+    }
+  }
+
+  return [...candidates];
+}
+
+function isAcceptedDictionaryWord(word) {
+  if (DICTIONARY.has(word)) {
+    return true;
+  }
+
+  return getInflectionBases(word).some((candidate) => DICTIONARY.has(candidate));
+}
+
 function countLetters(letters) {
   const counts = Object.create(null);
   for (const letter of letters) {
@@ -414,7 +496,7 @@ function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
   ensureNoPendingVote(room);
   const proposal = buildPlayProposal(room, rawWord, sourceWordId);
 
-  if (!DICTIONARY.has(proposal.word)) {
+  if (!isAcceptedDictionaryWord(proposal.word)) {
     openUnknownWordVote(room, player, proposal);
     broadcastRoom(room, requestUrl);
     return;
@@ -884,6 +966,7 @@ if (require.main === module) {
 
 module.exports = {
   DICTIONARY,
+  isAcceptedDictionaryWord,
   createRoom,
   joinRoom,
   claimOrStealWord,

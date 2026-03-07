@@ -20,6 +20,7 @@ A simple realtime browser version of your tile-flip anagrams game.
 - Claims and steals reset who gets the next flip.
 - A challenge pauses the room and opens a vote.
 - Unknown words can also go to a vote.
+- Regular inflections such as common plurals and simple `-ed` / `-ing` / `-er` / `-est` forms are accepted when the base word exists.
 - If a vote ties or loses, the challenged or unknown word is rejected.
 - The app does not try to decide English roots automatically.
 
