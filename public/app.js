@@ -284,6 +284,7 @@ function leaveRoom() {
   state.room = null;
   clearVoteCountdown();
   hideChatFlash();
+  elements.gamePanel.classList.remove('pregame');
   elements.chatInput.value = '';
   setSelectedSourceWord('');
   history.replaceState({}, '', '/');
@@ -565,6 +566,7 @@ function renderRoom() {
   const pausedForVote = Boolean(room.pendingVote);
   const pausedForPresence = Boolean(room.presenceCheck);
 
+  elements.gamePanel.classList.toggle('pregame', waitingToStart);
   elements.roomCode.textContent = room.code;
   elements.bagCount.textContent = String(room.bagRemaining);
   elements.lastAction.textContent = room.lastAction || 'Waiting for the next move.';
