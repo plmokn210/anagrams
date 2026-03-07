@@ -13,7 +13,7 @@ const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEPALIVE_MS = 15000;
 const CHAT_MESSAGE_MAX_LENGTH = 140;
 const VOTE_TIMEOUT_MS = 10_000;
-const TURN_TIMEOUT_MS = 10_000;
+const TURN_TIMEOUT_MS = 15_000;
 
 const TILE_DISTRIBUTION = {
   A: 13,
@@ -325,6 +325,8 @@ function createRoom(playerId, name) {
     currentTurnPlayerId: null,
     turnDeadlineAt: null,
     turnTimer: null,
+    idleAutoFlipCount: 0,
+    presenceCheck: null,
     pendingVote: null,
     voteTimer: null,
     eventSeq: 0,
@@ -385,6 +387,12 @@ function ensureRoundOpen(room) {
 function ensureNoPendingVote(room) {
   if (room.pendingVote) {
     throw badRequest('Finish the vote first.');
+  }
+}
+
+function ensurePresenceCheckCleared(room) {
+  if (room.presenceCheck) {
+    throw badRequest('Confirm you are still playing first.');
   }
 }
 
@@ -454,6 +462,7 @@ function buildPlayProposal(room, rawWord, sourceWordId) {
 }
 
 function applyPlayProposal(room, player, proposal, approvedByVote = false, requestUrl = null) {
+  room.idleAutoFlipCount = 0;
   if (proposal.mode === 'claim') {
     removeLettersFromCenter(room, proposal.countsToRemove);
     room.words.push({
@@ -530,13 +539,13 @@ function clearVoteTimer(room) {
 
 function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
   clearTurnTimer(room);
-  if (room.ended || room.pendingVote || !room.currentTurnPlayerId || !room.bag.length) {
+  if (room.ended || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
     return;
   }
 
   room.turnDeadlineAt = Date.now() + delayMs;
   room.turnTimer = setTimeout(() => {
-    if (room.ended || room.pendingVote || !room.currentTurnPlayerId || !room.bag.length) {
+    if (room.ended || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
       clearTurnTimer(room);
       return;
     }
@@ -547,11 +556,31 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
       return;
     }
 
+    if (room.idleAutoFlipCount >= 1) {
+      openPresenceCheck(room);
+      broadcastRoom(room, requestUrl);
+      return;
+    }
+
+    room.idleAutoFlipCount += 1;
     performFlip(room, player, requestUrl, true);
     broadcastRoom(room, requestUrl);
   }, delayMs);
 
   room.turnTimer.unref?.();
+}
+
+function openPresenceCheck(room) {
+  clearTurnTimer(room);
+  room.presenceCheck = {
+    id: crypto.randomUUID(),
+    title: 'Still playing?',
+    description: 'Two turns in a row timed out. Confirm to keep playing.'
+  };
+  room.lastAction = 'Two turns in a row timed out. Game paused until someone confirms they are still playing.';
+  setRoomEvent(room, 'presence_check_opened', null, {
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
 }
 
 function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
@@ -576,6 +605,7 @@ function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
 }
 
 function openUnknownWordVote(room, player, proposal, requestUrl) {
+  room.idleAutoFlipCount = 0;
   clearTurnTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
@@ -601,6 +631,7 @@ function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
   ensureNoPendingVote(room);
+  ensurePresenceCheckCleared(room);
   const proposal = buildPlayProposal(room, rawWord, sourceWordId);
 
   if (!isAcceptedDictionaryWord(proposal.word)) {
@@ -617,6 +648,7 @@ function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
   ensureNoPendingVote(room);
+  ensurePresenceCheckCleared(room);
   const source = room.words.find((entry) => entry.id === sourceWordId);
 
   if (!source) {
@@ -626,6 +658,7 @@ function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
     throw badRequest('That word has no steal to challenge.');
   }
 
+  room.idleAutoFlipCount = 0;
   clearTurnTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
@@ -735,6 +768,7 @@ function resolvePendingVote(room, actor, timedOut = false, requestUrl = null) {
 function vote(room, playerId, decision, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  room.idleAutoFlipCount = 0;
   if (!room.pendingVote) {
     throw badRequest('There is no active vote.');
   }
@@ -771,12 +805,33 @@ function flipTile(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
   ensureNoPendingVote(room);
+  ensurePresenceCheckCleared(room);
   ensureFlipTurn(room, playerId);
   if (!room.bag.length) {
     throw badRequest('No tiles are left to flip.');
   }
 
+  room.idleAutoFlipCount = 0;
   performFlip(room, player, requestUrl, false);
+  broadcastRoom(room, requestUrl);
+}
+
+function resumePresenceCheck(room, playerId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+  if (!room.presenceCheck) {
+    throw badRequest('The game is not paused.');
+  }
+
+  room.presenceCheck = null;
+  room.idleAutoFlipCount = 0;
+  scheduleTurnTimeout(room, requestUrl);
+  const currentTurnName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
+  room.lastAction = `${player.name} resumed the game. ${currentTurnName} is up.`;
+  setRoomEvent(room, 'presence_check_resolved', player, {
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    turnDeadlineAt: room.turnDeadlineAt
+  });
   broadcastRoom(room, requestUrl);
 }
 
@@ -795,6 +850,7 @@ function endRound(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
   ensureNoPendingVote(room);
+  ensurePresenceCheckCleared(room);
   if (room.bag.length > 0) {
     throw badRequest('You can only end the round after the bag is empty.');
   }
@@ -851,6 +907,18 @@ function serializePendingVote(room) {
   };
 }
 
+function serializePresenceCheck(room) {
+  if (!room.presenceCheck) {
+    return null;
+  }
+
+  return {
+    title: room.presenceCheck.title,
+    description: room.presenceCheck.description,
+    resumeLabel: 'Still playing'
+  };
+}
+
 function serializeRoom(room, requestUrl) {
   const wordsByPlayer = new Map();
   for (const playerId of room.players.keys()) {
@@ -898,6 +966,7 @@ function serializeRoom(room, requestUrl) {
     currentTurnPlayerId: room.currentTurnPlayerId,
     currentTurnPlayerName: room.pendingVote ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
     turnDeadlineAt: room.pendingVote ? null : room.turnDeadlineAt,
+    presenceCheck: serializePresenceCheck(room),
     pendingVote: serializePendingVote(room),
     ended: room.ended,
     lastAction: room.lastAction,
@@ -1020,7 +1089,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|resume|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -1094,6 +1163,12 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      if (request.method === 'POST' && action === 'resume') {
+        resumePresenceCheck(room, playerId, requestUrl);
+        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
+        return;
+      }
+
       if (request.method === 'POST' && action === 'end') {
         endRound(room, playerId, requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
@@ -1128,6 +1203,7 @@ module.exports = {
   openChallengeVote,
   vote,
   sendChatMessage,
+  resumePresenceCheck,
   flipTile,
   endRound,
   serializeRoom
