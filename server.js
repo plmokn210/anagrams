@@ -46,36 +46,6 @@ const TILE_DISTRIBUTION = {
 
 const DICTIONARY = loadDictionary();
 const rooms = new Map();
-const databasePool = createDatabasePool();
-const persistenceReady = initializePersistence();
-
-function createDatabasePool() {
-  if (!process.env.DATABASE_URL) {
-    return null;
-  }
-
-  const { Pool } = require('pg');
-  return new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL.includes('localhost')
-      ? false
-      : { rejectUnauthorized: false }
-  });
-}
-
-async function initializePersistence() {
-  if (!databasePool) {
-    return;
-  }
-
-  await databasePool.query(`
-    create table if not exists room_snapshots (
-      code text primary key,
-      snapshot jsonb not null,
-      updated_at timestamptz not null default now()
-    )
-  `);
-}
 
 function loadDictionary() {
   const words = fs.readFileSync(WORD_LIST_PATH, 'utf8')
@@ -382,144 +352,6 @@ function joinRoom(room, playerId, name) {
   setRoomEvent(room, 'join', room.players.get(playerId), { currentTurnPlayerId: room.currentTurnPlayerId });
 }
 
-function serializeRoomSnapshot(room) {
-  return {
-    code: room.code,
-    bag: room.bag,
-    centerTiles: room.centerTiles,
-    players: Array.from(room.players.values()),
-    words: room.words,
-    ended: room.ended,
-    createdAt: room.createdAt,
-    updatedAt: room.updatedAt,
-    currentTurnPlayerId: room.currentTurnPlayerId,
-    turnDeadlineAt: room.turnDeadlineAt,
-    pendingVote: room.pendingVote,
-    eventSeq: room.eventSeq,
-    lastEvent: room.lastEvent,
-    lastAction: room.lastAction
-  };
-}
-
-function hydrateRoomSnapshot(snapshot) {
-  return {
-    code: snapshot.code,
-    bag: Array.isArray(snapshot.bag) ? snapshot.bag : [],
-    centerTiles: Array.isArray(snapshot.centerTiles) ? snapshot.centerTiles : [],
-    players: new Map((snapshot.players || []).map((player) => [player.id, player])),
-    words: Array.isArray(snapshot.words) ? snapshot.words : [],
-    ended: Boolean(snapshot.ended),
-    createdAt: snapshot.createdAt || Date.now(),
-    updatedAt: snapshot.updatedAt || Date.now(),
-    clients: new Set(),
-    currentTurnPlayerId: snapshot.currentTurnPlayerId || null,
-    turnDeadlineAt: snapshot.turnDeadlineAt || null,
-    turnTimer: null,
-    pendingVote: snapshot.pendingVote || null,
-    voteTimer: null,
-    eventSeq: snapshot.eventSeq || 0,
-    lastEvent: snapshot.lastEvent || { id: 0, type: 'room_created', actorId: null, actorName: null },
-    lastAction: snapshot.lastAction || 'Room restored.'
-  };
-}
-
-async function saveRoomSnapshot(room) {
-  if (!databasePool) {
-    return;
-  }
-
-  await databasePool.query(
-    `
-      insert into room_snapshots (code, snapshot, updated_at)
-      values ($1, $2::jsonb, to_timestamp($3 / 1000.0))
-      on conflict (code) do update
-      set snapshot = excluded.snapshot,
-          updated_at = excluded.updated_at
-    `,
-    [room.code, JSON.stringify(serializeRoomSnapshot(room)), room.updatedAt]
-  );
-}
-
-async function loadRoomSnapshot(code) {
-  if (!databasePool) {
-    return null;
-  }
-
-  const result = await databasePool.query(
-    'select snapshot from room_snapshots where code = $1 limit 1',
-    [code]
-  );
-  if (!result.rows.length) {
-    return null;
-  }
-
-  return hydrateRoomSnapshot(result.rows[0].snapshot);
-}
-
-async function maybeRestoreRoom(code, requestUrl) {
-  const normalizedCode = String(code || '').toUpperCase();
-  let room = rooms.get(normalizedCode);
-  if (room) {
-    return room;
-  }
-
-  room = await loadRoomSnapshot(normalizedCode);
-  if (!room) {
-    return null;
-  }
-
-  if (room.updatedAt < Date.now() - ROOM_TTL_MS) {
-    return null;
-  }
-
-  rooms.set(normalizedCode, room);
-  await resumeRoomState(room, requestUrl);
-  return room;
-}
-
-async function resumeRoomState(room, requestUrl) {
-  clearTurnTimer(room);
-  clearVoteTimer(room);
-
-  if (room.ended) {
-    return;
-  }
-
-  if (!room.currentTurnPlayerId) {
-    setCurrentTurn(room, getTurnOrder(room)[0]?.id || null);
-  }
-
-  if (room.pendingVote) {
-    if (!room.pendingVote.deadlineAt || room.pendingVote.deadlineAt <= Date.now()) {
-      const actor = room.players.get(room.pendingVote.proposerId) || null;
-      resolvePendingVote(room, actor, true, requestUrl);
-      room.updatedAt = Date.now();
-      await saveRoomSnapshot(room);
-      return;
-    }
-
-    scheduleVoteTimeout(room, requestUrl, room.pendingVote.deadlineAt - Date.now());
-    return;
-  }
-
-  if (!room.bag.length || !room.currentTurnPlayerId) {
-    clearTurnTimer(room);
-    return;
-  }
-
-  if (!room.turnDeadlineAt || room.turnDeadlineAt <= Date.now()) {
-    const player = room.players.get(room.currentTurnPlayerId) || getTurnOrder(room)[0] || null;
-    if (player) {
-      performFlip(room, player, requestUrl, true);
-      room.updatedAt = Date.now();
-      await saveRoomSnapshot(room);
-    }
-    return;
-  }
-
-  scheduleTurnTimeout(room, requestUrl, room.turnDeadlineAt - Date.now());
-}
-
 function clearTurnTimer(room) {
   if (room.turnTimer) {
     clearTimeout(room.turnTimer);
@@ -528,8 +360,8 @@ function clearTurnTimer(room) {
   room.turnDeadlineAt = null;
 }
 
-async function ensureRoom(code, requestUrl) {
-  const room = rooms.get(String(code || '').toUpperCase()) || await maybeRestoreRoom(code, requestUrl);
+function ensureRoom(code) {
+  const room = rooms.get(String(code || '').toUpperCase());
   if (!room) {
     throw badRequest('Room not found.', 404);
   }
@@ -703,7 +535,7 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
   }
 
   room.turnDeadlineAt = Date.now() + delayMs;
-  room.turnTimer = setTimeout(async () => {
+  room.turnTimer = setTimeout(() => {
     if (room.ended || room.pendingVote || !room.currentTurnPlayerId || !room.bag.length) {
       clearTurnTimer(room);
       return;
@@ -717,7 +549,6 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
 
     performFlip(room, player, requestUrl, true);
     broadcastRoom(room, requestUrl);
-    await saveRoomSnapshot(room);
   }, delayMs);
 
   room.turnTimer.unref?.();
@@ -725,7 +556,7 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
 
 function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
   clearVoteTimer(room);
-  room.voteTimer = setTimeout(async () => {
+  room.voteTimer = setTimeout(() => {
     if (!room.pendingVote) {
       return;
     }
@@ -734,12 +565,10 @@ function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
     try {
       resolvePendingVote(room, actor, true, requestUrl);
       broadcastRoom(room, requestUrl);
-      await saveRoomSnapshot(room);
     } catch (error) {
       room.lastAction = error.message || 'Vote could not be resolved.';
       room.pendingVote = null;
       broadcastRoom(room, requestUrl);
-      await saveRoomSnapshot(room);
     }
   }, delayMs);
 
@@ -1172,8 +1001,6 @@ const server = http.createServer(async (request, response) => {
   const pathname = requestUrl.pathname;
 
   try {
-    await persistenceReady;
-
     if (request.method === 'GET' && pathname === '/api/health') {
       sendJson(response, 200, { ok: true });
       return;
@@ -1186,7 +1013,6 @@ const server = http.createServer(async (request, response) => {
       if (!room.turnTimer) {
         scheduleTurnTimeout(room, requestUrl);
       }
-      await saveRoomSnapshot(room);
       sendJson(response, 201, {
         playerId,
         room: serializeRoom(room, requestUrl)
@@ -1197,7 +1023,7 @@ const server = http.createServer(async (request, response) => {
     const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
-      const room = await ensureRoom(code, requestUrl);
+      const room = ensureRoom(code);
 
       if (request.method === 'GET' && action === 'state') {
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
@@ -1231,7 +1057,6 @@ const server = http.createServer(async (request, response) => {
           scheduleTurnTimeout(room, requestUrl);
         }
         broadcastRoom(room, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, {
           playerId,
           room: serializeRoom(room, requestUrl)
@@ -1241,42 +1066,36 @@ const server = http.createServer(async (request, response) => {
 
       if (request.method === 'POST' && action === 'flip') {
         flipTile(room, playerId, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'play') {
         claimOrStealWord(room, playerId, body.word, body.sourceWordId || '', requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'challenge') {
         openChallengeVote(room, playerId, body.sourceWordId, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'vote') {
         vote(room, playerId, body.decision, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'chat') {
         sendChatMessage(room, playerId, body.message, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
       if (request.method === 'POST' && action === 'end') {
         endRound(room, playerId, requestUrl);
-        await saveRoomSnapshot(room);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
@@ -1295,13 +1114,8 @@ const server = http.createServer(async (request, response) => {
 });
 
 if (require.main === module) {
-  persistenceReady.then(() => {
-    server.listen(PORT, HOST, () => {
-      console.log('Anagrams Live running on http://' + HOST + ':' + PORT);
-    });
-  }).catch((error) => {
-    console.error('Failed to initialize persistence.', error);
-    process.exit(1);
+  server.listen(PORT, HOST, () => {
+    console.log('Anagrams Live running on http://' + HOST + ':' + PORT);
   });
 }
 
