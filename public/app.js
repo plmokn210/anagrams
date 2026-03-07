@@ -329,12 +329,35 @@ function renderTiles(tiles) {
   elements.centerTiles.innerHTML = tiles.map((tile) => `<span class="tile">${tile}</span>`).join('');
 }
 
+function getStealTransition(room, wordId) {
+  if (room.lastEvent?.type !== 'steal' || room.lastEvent.wordId !== wordId || !room.lastEvent.previousWord) {
+    return null;
+  }
+
+  return {
+    previous: room.lastEvent.previousWord.toUpperCase(),
+    current: room.lastEvent.word.toUpperCase()
+  };
+}
+
+function renderStealTransitionText(transition) {
+  return `
+    <span class="steal-text">
+      <span class="steal-old">${transition.previous}</span>
+      <span class="steal-new">${transition.current}</span>
+    </span>
+  `;
+}
+
 function renderCompactWords(room) {
   const freshWordId = ['claim', 'steal'].includes(room.lastEvent?.type) ? room.lastEvent.wordId : '';
   const words = room.allWords.map((word) => {
     const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
     const freshClass = freshWordId === word.id ? ' fresh' : '';
-    return `<button class="compact-word-chip${selectedClass}${freshClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()}</button>`;
+    const transition = getStealTransition(room, word.id);
+    const revealClass = transition ? ' steal-reveal' : '';
+    const label = transition ? renderStealTransitionText(transition) : word.text.toUpperCase();
+    return `<button class="compact-word-chip${selectedClass}${freshClass}${revealClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${label}</button>`;
   });
 
   elements.compactWords.innerHTML = words.length
@@ -351,10 +374,16 @@ function renderPlayers(room) {
           : '';
         const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
 
+        const transition = getStealTransition(room, word.id);
+        const revealClass = transition ? ' steal-reveal' : '';
+        const label = transition
+          ? renderStealTransitionText(transition)
+          : `<strong>${word.text.toUpperCase()}</strong>`;
+
         return `
           <div class="word-pill">
-            <button class="word-pick selectable-word${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">
-              <strong>${word.text.toUpperCase()}</strong>
+            <button class="word-pick selectable-word${selectedClass}${revealClass}" data-action="pick-source" data-word-id="${word.id}" type="button">
+              ${label}
               <span>+${word.score}</span>
             </button>
             ${challengeButton}
@@ -690,6 +719,9 @@ function applyRoomUpdate(room, allowEffects) {
   }
   if (room.lastEvent?.type === 'challenge_opened' || room.lastEvent?.type === 'word_vote_opened') {
     showToast('Vote opened. Everyone needs to vote.', 2200);
+  }
+  if (room.lastEvent?.type === 'player_removed' && room.lastEvent?.reason === 'inactivity') {
+    showToast(`${room.lastEvent.actorName || 'A player'} was removed for inactivity.`, 2400);
   }
   if (room.lastEvent?.type === 'end' && room.lastEvent?.autoEnded) {
     showToast('Time is up. Round ended automatically.', 2400);

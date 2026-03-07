@@ -372,6 +372,55 @@ h3 {
   animation: chip-flash 900ms ease-out;
 }
 
+.steal-reveal {
+  position: relative;
+  overflow: hidden;
+}
+
+.steal-text {
+  position: relative;
+  display: inline-grid;
+  min-width: 0;
+}
+
+.steal-old,
+.steal-new {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+.steal-old {
+  color: var(--danger);
+  animation: steal-old-fade 1200ms ease forwards;
+}
+
+.steal-new {
+  opacity: 0;
+  animation: steal-new-rise 1200ms ease forwards;
+}
+
+@keyframes steal-old-fade {
+  0%, 42% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-50%);
+  }
+}
+
+@keyframes steal-new-rise {
+  0%, 42% {
+    opacity: 0;
+    transform: translateY(45%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes chip-flash {
   0% {
     background: #ffe7a3;
@@ -823,7 +872,17 @@ h3 {
   }
 
   .compact-words {
-    gap: 0.35rem;
+    gap: 0.3rem;
+  }
+
+  .compact-word-chip {
+    padding: 0.22rem 0.42rem;
+    font-size: 0.6rem;
+  }
+
+  .word-pick {
+    padding: 0.48rem 0.6rem;
+    font-size: 0.88rem;
   }
 
   .tile-rack {
@@ -839,5 +898,26 @@ h3 {
 
   .toast {
     bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+}
+
+
+@media (max-width: 400px) {
+  .compact-words {
+    gap: 0.22rem;
+  }
+
+  .compact-word-chip {
+    padding: 0.18rem 0.34rem;
+    font-size: 0.54rem;
+  }
+
+  .word-pick {
+    padding: 0.42rem 0.5rem;
+    font-size: 0.8rem;
+  }
+
+  .word-pick span:last-child {
+    font-size: 0.74rem;
   }
 }
