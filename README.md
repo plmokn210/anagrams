@@ -27,6 +27,7 @@ A simple realtime browser version of your tile-flip anagrams game.
 ## Run locally
 ```bash
 cd /Users/ari/Desktop/anagrams
+npm install
 npm start
 ```
 
@@ -38,7 +39,9 @@ Then open [http://localhost:3000](http://localhost:3000).
 2. Push the project.
 3. In Render, click `New +` and choose `Blueprint`.
 4. Connect the repo and let Render read `render.yaml`.
-5. Approve the service and deploy, then send the generated URL to your girlfriend.
+5. Let the Blueprint create both the web service and the Postgres database.
+6. Approve the Blueprint sync so `DATABASE_URL` is attached automatically.
+7. Deploy, then send the generated URL to your girlfriend.
 
 ### Railway
 1. Push this folder to GitHub.
@@ -46,7 +49,8 @@ Then open [http://localhost:3000](http://localhost:3000).
 3. Railway will run `npm start` automatically.
 
 ## Notes
-- Room state is stored in server memory, which is fine for a quick two-player game.
-- If the server restarts, active rooms are lost.
+- If `DATABASE_URL` is set, room state is stored in Postgres and survives web-service redeploys/restarts.
+- Without `DATABASE_URL`, room state stays in server memory and is lost on restart.
+- Free Render Postgres persists room state, but Render expires free Postgres instances after 30 days unless upgraded.
 - The bundled dictionary now includes both `web2` and `web2a`, filtered against proper names.
 - Browser sound requires at least one tap or keypress in the page before the browser will play audio.
