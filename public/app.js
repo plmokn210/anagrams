@@ -316,13 +316,16 @@ function renderPlayers(room) {
         const challengeButton = word.canChallenge && !room.ended && !room.pendingVote
           ? `<button class="pill-action" data-action="challenge" data-word-id="${word.id}" type="button">Challenge</button>`
           : '';
+        const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
 
         return `
-          <span class="word-pill selectable-word${state.selectedSourceWordId === word.id ? ' selected' : ''}" data-action="pick-source" data-word-id="${word.id}">
-            <strong>${word.text.toUpperCase()}</strong>
-            <span>+${word.score}</span>
+          <div class="word-pill">
+            <button class="word-pick selectable-word${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">
+              <strong>${word.text.toUpperCase()}</strong>
+              <span>+${word.score}</span>
+            </button>
             ${challengeButton}
-          </span>
+          </div>
         `;
       }).join('')
       : '<p class="hint">No words yet.</p>';
