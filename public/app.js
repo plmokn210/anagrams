@@ -1,11 +1,12 @@
 const state = {
   playerId: localStorage.getItem('anagrams-player-id') || crypto.randomUUID(),
-  playerName: localStorage.getItem('anagrams-player-name') || '',
+  playerName: '',
   room: null,
   eventSource: null,
   soundEnabled: localStorage.getItem('anagrams-sound-enabled') !== 'false',
   audioContext: null,
-  shownJessRoomKey: null
+  shownJessRoomKey: null,
+  selectedSourceWordId: ''
 };
 
 localStorage.setItem('anagrams-player-id', state.playerId);
@@ -29,6 +30,9 @@ const elements = {
   playWord: document.querySelector('#play-word'),
   playSource: document.querySelector('#play-source'),
   playersGrid: document.querySelector('#players-grid'),
+  chatForm: document.querySelector('#chat-form'),
+  chatInput: document.querySelector('#chat-input'),
+  chatFlash: document.querySelector('#chat-flash'),
   votePanel: document.querySelector('#vote-panel'),
   homeButton: document.querySelector('#home-button'),
   voteTitle: document.querySelector('#vote-title'),
@@ -53,11 +57,6 @@ if (prefilledRoom) {
   elements.joinCode.value = prefilledRoom;
 }
 
-if (state.playerName) {
-  elements.createName.value = state.playerName;
-  elements.joinName.value = state.playerName;
-}
-
 function showToast(message, timeout = 2500) {
   elements.toast.textContent = message;
   elements.toast.classList.remove('hidden');
@@ -65,6 +64,30 @@ function showToast(message, timeout = 2500) {
   showToast.timer = setTimeout(() => {
     elements.toast.classList.add('hidden');
   }, timeout);
+}
+
+function hideChatFlash() {
+  elements.chatFlash.classList.add('hidden');
+  elements.chatFlash.textContent = '';
+}
+
+function showChatFlash(actorName, message) {
+  elements.chatFlash.textContent = `${actorName}: ${message}`;
+  elements.chatFlash.classList.remove('hidden');
+  clearTimeout(showChatFlash.timer);
+  showChatFlash.timer = setTimeout(() => {
+    hideChatFlash();
+  }, 4200);
+}
+
+function setSelectedSourceWord(wordId = '') {
+  state.selectedSourceWordId = wordId || '';
+  elements.playSource.value = state.selectedSourceWordId;
+
+  if (state.room) {
+    renderCompactWords(state.room);
+    renderPlayers(state.room);
+  }
 }
 
 async function request(path, options = {}) {
@@ -84,7 +107,6 @@ async function request(path, options = {}) {
 
 function persistName(name) {
   state.playerName = name;
-  localStorage.setItem('anagrams-player-name', name);
   elements.createName.value = name;
   elements.joinName.value = name;
 }
@@ -233,6 +255,9 @@ function leaveRoom() {
     state.eventSource = null;
   }
   state.room = null;
+  hideChatFlash();
+  elements.chatInput.value = '';
+  setSelectedSourceWord('');
   history.replaceState({}, '', '/');
   elements.gamePanel.classList.add('hidden');
   elements.lobbyPanel.classList.remove('hidden');
@@ -256,11 +281,16 @@ function renderTiles(tiles) {
 
 function renderCompactWords(room) {
   elements.compactWords.innerHTML = room.players.map((player) => {
-    const words = player.words.length ? player.words.map((word) => word.text.toUpperCase()).join(' · ') : 'none';
+    const words = player.words.length
+      ? player.words.map((word) => {
+        const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
+        return `<button class="compact-word-chip${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()} · ${player.name}</button>`;
+      }).join('')
+      : '<p class="hint">none</p>';
     return `
       <article class="compact-player">
         <strong>${player.name}${player.id === state.playerId ? ' (You)' : ''}</strong>
-        <p>${words}</p>
+        <div class="compact-player-words">${words}</div>
       </article>
     `;
   }).join('');
@@ -275,7 +305,7 @@ function renderPlayers(room) {
           : '';
 
         return `
-          <span class="word-pill">
+          <span class="word-pill selectable-word${state.selectedSourceWordId === word.id ? ' selected' : ''}" data-action="pick-source" data-word-id="${word.id}">
             <strong>${word.text.toUpperCase()}</strong>
             <span>+${word.score}</span>
             ${challengeButton}
@@ -305,6 +335,11 @@ function renderPlayOptions(words) {
     options.push(`<option value="${word.id}">${word.text.toUpperCase()} · ${word.ownerName}</option>`);
   }
   elements.playSource.innerHTML = options.join('');
+  const hasSelection = words.some((word) => word.id === state.selectedSourceWordId);
+  elements.playSource.value = hasSelection ? state.selectedSourceWordId : '';
+  if (!hasSelection) {
+    state.selectedSourceWordId = '';
+  }
 }
 
 function renderTurnState(room) {
@@ -393,11 +428,13 @@ function renderRoom() {
   elements.playWord.disabled = room.ended || pausedForVote;
   elements.playSource.disabled = room.ended || pausedForVote;
   elements.playForm.querySelector('button').disabled = room.ended || pausedForVote;
+  elements.chatInput.disabled = false;
+  elements.chatForm.querySelector('button').disabled = false;
   renderTurnState(room);
   renderTiles(room.centerTiles);
+  renderPlayOptions(room.allWords);
   renderCompactWords(room);
   renderPlayers(room);
-  renderPlayOptions(room.allWords);
   renderVotePanel(room);
   renderFinalPanel(room);
   renderSoundToggle();
@@ -426,6 +463,9 @@ function applyRoomUpdate(room, allowEffects) {
   }
   if (room.lastEvent?.type === 'steal') {
     playStealSound();
+  }
+  if (room.lastEvent?.type === 'chat' && room.lastEvent.message) {
+    showChatFlash(room.lastEvent.actorName || 'Player', room.lastEvent.message);
   }
   if (room.lastEvent?.type === 'challenge_opened' || room.lastEvent?.type === 'word_vote_opened') {
     showToast('Vote opened. Everyone needs to vote.', 2200);
@@ -530,26 +570,62 @@ elements.playForm.addEventListener('submit', async (event) => {
   try {
     await sendAction('play', {
       word,
-      sourceWordId: elements.playSource.value || ''
+      sourceWordId: state.selectedSourceWordId || ''
     });
     elements.playWord.value = '';
-    elements.playSource.value = '';
+    setSelectedSourceWord('');
   } catch (error) {
     showToast(error.message);
   }
 });
 
-elements.playersGrid.addEventListener('click', async (event) => {
-  const button = event.target.closest('[data-action="challenge"]');
-  if (!button || !button.dataset.wordId) {
+elements.chatForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = elements.chatInput.value.trim();
+  if (!message) {
     return;
   }
-
   try {
-    await sendAction('challenge', { sourceWordId: button.dataset.wordId });
+    await sendAction('chat', { message });
+    elements.chatInput.value = '';
   } catch (error) {
     showToast(error.message);
   }
+});
+
+elements.playSource.addEventListener('change', () => {
+  setSelectedSourceWord(elements.playSource.value || '');
+});
+
+elements.compactWords.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-action="pick-source"]');
+  if (!button || !button.dataset.wordId) {
+    return;
+  }
+  const nextWordId = button.dataset.wordId === state.selectedSourceWordId ? '' : button.dataset.wordId;
+  setSelectedSourceWord(nextWordId);
+  elements.playWord.focus();
+});
+
+elements.playersGrid.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-action="challenge"]');
+  if (button && button.dataset.wordId) {
+    try {
+      await sendAction('challenge', { sourceWordId: button.dataset.wordId });
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
+
+  const word = event.target.closest('[data-action="pick-source"]');
+  if (!word || !word.dataset.wordId) {
+    return;
+  }
+
+  const nextWordId = word.dataset.wordId === state.selectedSourceWordId ? '' : word.dataset.wordId;
+  setSelectedSourceWord(nextWordId);
+  elements.playWord.focus();
 });
 
 elements.voteApprove.addEventListener('click', async () => {
@@ -628,3 +704,4 @@ window.addEventListener('beforeunload', () => {
 
 renderSoundToggle();
 closeJessMessage();
+hideChatFlash();

@@ -11,6 +11,7 @@ const WORD_LIST_PATH = path.join(__dirname, 'data', 'words.txt');
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEPALIVE_MS = 15000;
+const CHAT_MESSAGE_MAX_LENGTH = 140;
 
 const TILE_DISTRIBUTION = {
   A: 13,
@@ -77,6 +78,14 @@ function safePlayerName(value) {
     return 'Player';
   }
   return trimmed.slice(0, 24);
+}
+
+function safeChatMessage(value) {
+  const trimmed = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!trimmed) {
+    throw badRequest('Write a message first.');
+  }
+  return trimmed.slice(0, CHAT_MESSAGE_MAX_LENGTH);
 }
 
 function normalizeWord(value) {
@@ -654,6 +663,17 @@ function flipTile(room, playerId, requestUrl) {
   broadcastRoom(room, requestUrl);
 }
 
+function sendChatMessage(room, playerId, rawMessage, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  const message = safeChatMessage(rawMessage);
+
+  setRoomEvent(room, 'chat', player, {
+    message,
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+  broadcastRoom(room, requestUrl);
+}
+
 function endRound(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
@@ -874,7 +894,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -939,6 +959,12 @@ const server = http.createServer(async (request, response) => {
         return;
       }
 
+      if (request.method === 'POST' && action === 'chat') {
+        sendChatMessage(room, playerId, body.message, requestUrl);
+        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
+        return;
+      }
+
       if (request.method === 'POST' && action === 'end') {
         endRound(room, playerId, requestUrl);
         sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
@@ -972,6 +998,7 @@ module.exports = {
   claimOrStealWord,
   openChallengeVote,
   vote,
+  sendChatMessage,
   flipTile,
   endRound,
   serializeRoom

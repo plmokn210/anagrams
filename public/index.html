@@ -27,7 +27,7 @@
           <form id="create-form" class="stacked-form">
             <label>
               <span>Your name</span>
-              <input id="create-name" name="name" maxlength="24" placeholder="Ari" required autocapitalize="words" autocomplete="nickname">
+              <input id="create-name" name="name" maxlength="24" placeholder="Name" required autocapitalize="words" autocomplete="off">
             </label>
             <button type="submit">Create room</button>
           </form>
@@ -35,7 +35,7 @@
           <form id="join-form" class="stacked-form split-form">
             <label>
               <span>Your name</span>
-              <input id="join-name" name="name" maxlength="24" placeholder="Maya" required autocapitalize="words" autocomplete="nickname">
+              <input id="join-name" name="name" maxlength="24" placeholder="Name" required autocapitalize="words" autocomplete="off">
             </label>
             <label>
               <span>Room code</span>
@@ -73,6 +73,13 @@
               <strong id="last-action">Waiting for the room to start.</strong>
             </div>
           </div>
+
+          <section class="panel inset chat-panel">
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" maxlength="140" placeholder="Send a quick note to the room" autocomplete="off" autocapitalize="sentences" spellcheck="true">
+              <button id="chat-send" class="secondary" type="submit">Send</button>
+            </form>
+          </section>
 
           <section class="panel inset vote-panel hidden" id="vote-panel">
             <div class="vote-copy">
@@ -154,6 +161,7 @@
     </div>
 
     <div class="toast hidden" id="toast"></div>
+    <div class="chat-flash hidden" id="chat-flash" aria-live="polite"></div>
     <script src="/app.js" defer></script>
   </body>
 </html>
