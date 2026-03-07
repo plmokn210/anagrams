@@ -13,6 +13,7 @@ const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const KEEPALIVE_MS = 15000;
 const CHAT_MESSAGE_MAX_LENGTH = 140;
 const VOTE_TIMEOUT_MS = 10_000;
+const TURN_TIMEOUT_MS = 10_000;
 
 const TILE_DISTRIBUTION = {
   A: 13,
@@ -322,6 +323,8 @@ function createRoom(playerId, name) {
     updatedAt: Date.now(),
     clients: new Set(),
     currentTurnPlayerId: null,
+    turnDeadlineAt: null,
+    turnTimer: null,
     pendingVote: null,
     voteTimer: null,
     eventSeq: 0,
@@ -347,6 +350,14 @@ function joinRoom(room, playerId, name) {
   room.updatedAt = Date.now();
   room.lastAction = `${safePlayerName(name)} joined the room.`;
   setRoomEvent(room, 'join', room.players.get(playerId), { currentTurnPlayerId: room.currentTurnPlayerId });
+}
+
+function clearTurnTimer(room) {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = null;
+  }
+  room.turnDeadlineAt = null;
 }
 
 function ensureRoom(code) {
@@ -442,7 +453,7 @@ function buildPlayProposal(room, rawWord, sourceWordId) {
   };
 }
 
-function applyPlayProposal(room, player, proposal, approvedByVote = false) {
+function applyPlayProposal(room, player, proposal, approvedByVote = false, requestUrl = null) {
   if (proposal.mode === 'claim') {
     removeLettersFromCenter(room, proposal.countsToRemove);
     room.words.push({
@@ -472,6 +483,9 @@ function applyPlayProposal(room, player, proposal, approvedByVote = false) {
   }
 
   setCurrentTurn(room, player.id);
+  if (requestUrl) {
+    scheduleTurnTimeout(room, requestUrl);
+  }
   const verb = proposal.mode === 'claim' ? 'claimed' : 'stole';
   room.lastAction = approvedByVote
     ? `Vote complete. ${player.name} ${verb} ${proposal.word.toUpperCase()}. ${player.name} flips next.`
@@ -479,7 +493,31 @@ function applyPlayProposal(room, player, proposal, approvedByVote = false) {
   setRoomEvent(room, proposal.mode, player, {
     word: proposal.word,
     currentTurnPlayerId: room.currentTurnPlayerId,
-    approvedByVote
+    approvedByVote,
+    turnDeadlineAt: room.turnDeadlineAt
+  });
+}
+
+function performFlip(room, player, requestUrl, autoFlipped = false) {
+  if (!room.bag.length) {
+    clearTurnTimer(room);
+    return;
+  }
+
+  const tile = room.bag.pop();
+  room.centerTiles.push(tile);
+  room.currentTurnPlayerId = getNextTurnPlayerId(room, player.id);
+  scheduleTurnTimeout(room, requestUrl);
+  const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
+  room.lastAction = autoFlipped
+    ? `${player.name} ran out of time. ${tile} flipped automatically. ${nextPlayerName} is up.`
+    : `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
+  setRoomEvent(room, 'flip', player, {
+    tile,
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    nextTurnPlayerName: nextPlayerName,
+    autoFlipped,
+    turnDeadlineAt: room.turnDeadlineAt
   });
 }
 
@@ -488,6 +526,32 @@ function clearVoteTimer(room) {
     clearTimeout(room.voteTimer);
     room.voteTimer = null;
   }
+}
+
+function scheduleTurnTimeout(room, requestUrl) {
+  clearTurnTimer(room);
+  if (room.ended || room.pendingVote || !room.currentTurnPlayerId || !room.bag.length) {
+    return;
+  }
+
+  room.turnDeadlineAt = Date.now() + TURN_TIMEOUT_MS;
+  room.turnTimer = setTimeout(() => {
+    if (room.ended || room.pendingVote || !room.currentTurnPlayerId || !room.bag.length) {
+      clearTurnTimer(room);
+      return;
+    }
+
+    const player = room.players.get(room.currentTurnPlayerId);
+    if (!player) {
+      clearTurnTimer(room);
+      return;
+    }
+
+    performFlip(room, player, requestUrl, true);
+    broadcastRoom(room, requestUrl);
+  }, TURN_TIMEOUT_MS);
+
+  room.turnTimer.unref?.();
 }
 
 function scheduleVoteTimeout(room, requestUrl) {
@@ -499,7 +563,7 @@ function scheduleVoteTimeout(room, requestUrl) {
 
     const actor = room.players.get(room.pendingVote.proposerId) || null;
     try {
-      resolvePendingVote(room, actor, true);
+      resolvePendingVote(room, actor, true, requestUrl);
       broadcastRoom(room, requestUrl);
     } catch (error) {
       room.lastAction = error.message || 'Vote could not be resolved.';
@@ -512,6 +576,7 @@ function scheduleVoteTimeout(room, requestUrl) {
 }
 
 function openUnknownWordVote(room, player, proposal, requestUrl) {
+  clearTurnTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
     kind: 'word',
@@ -544,7 +609,7 @@ function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
     return;
   }
 
-  applyPlayProposal(room, player, proposal, false);
+  applyPlayProposal(room, player, proposal, false, requestUrl);
   broadcastRoom(room, requestUrl);
 }
 
@@ -561,6 +626,7 @@ function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
     throw badRequest('That word has no steal to challenge.');
   }
 
+  clearTurnTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
     kind: 'challenge',
@@ -592,7 +658,7 @@ function revertLatestSteal(room, source) {
   return lastSteal;
 }
 
-function resolvePendingVote(room, actor, timedOut = false) {
+function resolvePendingVote(room, actor, timedOut = false, requestUrl = null) {
   const pendingVote = room.pendingVote;
   clearVoteTimer(room);
   const approveVotes = Object.values(pendingVote.votes).filter((vote) => vote === 'approve').length;
@@ -606,27 +672,36 @@ function resolvePendingVote(room, actor, timedOut = false) {
     }
 
     if (approveVotes > rejectVotes) {
+      room.pendingVote = null;
+      if (requestUrl) {
+        scheduleTurnTimeout(room, requestUrl);
+      }
       room.lastAction = timedOut
         ? `Vote timed out. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`
         : `Vote complete. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
       setRoomEvent(room, 'challenge_resolved_keep', actor, {
         word: source.text,
         currentTurnPlayerId: room.currentTurnPlayerId,
-        timedOut
+        timedOut,
+        turnDeadlineAt: room.turnDeadlineAt
       });
     } else {
       const reverted = revertLatestSteal(room, source);
       setCurrentTurn(room, reverted.previousTurnPlayerId || source.ownerId);
+      room.pendingVote = null;
+      if (requestUrl) {
+        scheduleTurnTimeout(room, requestUrl);
+      }
       room.lastAction = timedOut
         ? `Vote timed out. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`
         : `Vote complete. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`;
       setRoomEvent(room, 'challenge_resolved_revert', actor, {
         word: source.text,
         currentTurnPlayerId: room.currentTurnPlayerId,
-        timedOut
+        timedOut,
+        turnDeadlineAt: room.turnDeadlineAt
       });
     }
-    room.pendingVote = null;
     return;
   }
 
@@ -638,19 +713,23 @@ function resolvePendingVote(room, actor, timedOut = false) {
     }
     const proposal = pendingVote.proposal;
     room.pendingVote = null;
-    applyPlayProposal(room, proposer, proposal, true);
+    applyPlayProposal(room, proposer, proposal, true, requestUrl);
     return;
   }
 
+  room.pendingVote = null;
+  if (requestUrl) {
+    scheduleTurnTimeout(room, requestUrl);
+  }
   room.lastAction = timedOut
     ? `Vote timed out. ${pendingVote.wordText.toUpperCase()} was rejected.`
     : `Vote complete. ${pendingVote.wordText.toUpperCase()} was rejected.`;
   setRoomEvent(room, 'word_vote_rejected', actor, {
     word: pendingVote.wordText,
     currentTurnPlayerId: room.currentTurnPlayerId,
-    timedOut
+    timedOut,
+    turnDeadlineAt: room.turnDeadlineAt
   });
-  room.pendingVote = null;
 }
 
 function vote(room, playerId, decision, requestUrl) {
@@ -670,7 +749,7 @@ function vote(room, playerId, decision, requestUrl) {
   const everyoneVoted = room.pendingVote.eligiblePlayerIds.every((id) => room.pendingVote.votes[id]);
 
   if (everyoneVoted) {
-    resolvePendingVote(room, player);
+    resolvePendingVote(room, player, false, requestUrl);
     broadcastRoom(room, requestUrl);
     return;
   }
@@ -697,16 +776,7 @@ function flipTile(room, playerId, requestUrl) {
     throw badRequest('No tiles are left to flip.');
   }
 
-  const tile = room.bag.pop();
-  room.centerTiles.push(tile);
-  room.currentTurnPlayerId = getNextTurnPlayerId(room, playerId);
-  const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
-  room.lastAction = `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
-  setRoomEvent(room, 'flip', player, {
-    tile,
-    currentTurnPlayerId: room.currentTurnPlayerId,
-    nextTurnPlayerName: nextPlayerName
-  });
+  performFlip(room, player, requestUrl, false);
   broadcastRoom(room, requestUrl);
 }
 
@@ -729,6 +799,7 @@ function endRound(room, playerId, requestUrl) {
     throw badRequest('You can only end the round after the bag is empty.');
   }
 
+  clearTurnTimer(room);
   room.ended = true;
   room.lastAction = `${player.name} ended the round.`;
   setRoomEvent(room, 'end', player, { currentTurnPlayerId: room.currentTurnPlayerId });
@@ -826,6 +897,7 @@ function serializeRoom(room, requestUrl) {
     })),
     currentTurnPlayerId: room.currentTurnPlayerId,
     currentTurnPlayerName: room.pendingVote ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
+    turnDeadlineAt: room.pendingVote ? null : room.turnDeadlineAt,
     pendingVote: serializePendingVote(room),
     ended: room.ended,
     lastAction: room.lastAction,
@@ -912,6 +984,7 @@ function cleanupRooms() {
   const cutoff = Date.now() - ROOM_TTL_MS;
   for (const [code, room] of rooms.entries()) {
     if (room.updatedAt < cutoff) {
+      clearTurnTimer(room);
       clearVoteTimer(room);
       for (const client of room.clients) {
         client.end();
@@ -937,6 +1010,9 @@ const server = http.createServer(async (request, response) => {
       const body = await parseJsonBody(request);
       const playerId = getOrCreatePlayerId(body.playerId);
       const room = createRoom(playerId, body.name);
+      if (!room.turnTimer) {
+        scheduleTurnTimeout(room, requestUrl);
+      }
       sendJson(response, 201, {
         playerId,
         room: serializeRoom(room, requestUrl)
@@ -977,6 +1053,9 @@ const server = http.createServer(async (request, response) => {
 
       if (request.method === 'POST' && action === 'join') {
         joinRoom(room, playerId, body.name);
+        if (!room.turnTimer && !room.pendingVote && !room.ended) {
+          scheduleTurnTimeout(room, requestUrl);
+        }
         broadcastRoom(room, requestUrl);
         sendJson(response, 200, {
           playerId,
