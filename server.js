@@ -325,6 +325,8 @@ function createRoom(playerId, name) {
     currentTurnPlayerId: null,
     turnDeadlineAt: null,
     turnTimer: null,
+    startedAt: null,
+    startCheck: null,
     idleAutoFlipCount: 0,
     presenceCheck: null,
     pendingVote: null,
@@ -350,7 +352,15 @@ function joinRoom(room, playerId, name) {
     room.currentTurnPlayerId = playerId;
   }
   room.updatedAt = Date.now();
-  room.lastAction = `${safePlayerName(name)} joined the room.`;
+
+  if (!room.startedAt && room.players.size >= 2) {
+    openStartCheck(room);
+    return;
+  }
+
+  room.lastAction = room.startedAt
+    ? `${safePlayerName(name)} joined the room.`
+    : `${safePlayerName(name)} joined the room. Waiting for one more player to begin.`;
   setRoomEvent(room, 'join', room.players.get(playerId), { currentTurnPlayerId: room.currentTurnPlayerId });
 }
 
@@ -394,6 +404,16 @@ function ensurePresenceCheckCleared(room) {
   if (room.presenceCheck) {
     throw badRequest('Confirm you are still playing first.');
   }
+}
+
+function ensureGameStarted(room) {
+  if (room.startedAt) {
+    return;
+  }
+  if (room.players.size < 2) {
+    throw badRequest('Wait for another player to join first.');
+  }
+  throw badRequest('Everyone needs to confirm before the game begins.');
 }
 
 function ensureFlipTurn(room, playerId) {
@@ -539,13 +559,13 @@ function clearVoteTimer(room) {
 
 function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
   clearTurnTimer(room);
-  if (room.ended || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
+  if (room.ended || !room.startedAt || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
     return;
   }
 
   room.turnDeadlineAt = Date.now() + delayMs;
   room.turnTimer = setTimeout(() => {
-    if (room.ended || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
+    if (room.ended || !room.startedAt || room.pendingVote || room.presenceCheck || !room.currentTurnPlayerId || !room.bag.length) {
       clearTurnTimer(room);
       return;
     }
@@ -568,6 +588,19 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
   }, delayMs);
 
   room.turnTimer.unref?.();
+}
+
+function openStartCheck(room) {
+  clearTurnTimer(room);
+  room.startCheck = {
+    id: crypto.randomUUID(),
+    eligiblePlayerIds: getTurnOrder(room).map((entry) => entry.id),
+    readyPlayerIds: []
+  };
+  room.lastAction = 'Everyone is here. Confirm when you want to begin.';
+  setRoomEvent(room, 'start_check_opened', null, {
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
 }
 
 function openPresenceCheck(room) {
@@ -604,6 +637,45 @@ function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
   room.voteTimer.unref?.();
 }
 
+function confirmStart(room, playerId, requestUrl) {
+  const player = ensurePlayer(room, playerId);
+  ensureRoundOpen(room);
+
+  if (room.startedAt) {
+    return;
+  }
+  if (!room.startCheck || room.players.size < 2) {
+    throw badRequest('Wait for another player to join first.');
+  }
+
+  const readyIds = new Set(room.startCheck.readyPlayerIds);
+  readyIds.add(player.id);
+  room.startCheck.readyPlayerIds = room.startCheck.eligiblePlayerIds.filter((id) => readyIds.has(id));
+
+  const everyoneReady = room.startCheck.eligiblePlayerIds.every((id) => readyIds.has(id));
+  if (everyoneReady) {
+    room.startedAt = Date.now();
+    room.startCheck = null;
+    room.idleAutoFlipCount = 0;
+    const currentTurnName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
+    room.lastAction = `Everyone is ready. ${currentTurnName} flips first.`;
+    scheduleTurnTimeout(room, requestUrl);
+    setRoomEvent(room, 'game_started', player, {
+      currentTurnPlayerId: room.currentTurnPlayerId,
+      turnDeadlineAt: room.turnDeadlineAt
+    });
+    return;
+  }
+
+  const waitingOn = room.startCheck.eligiblePlayerIds
+    .filter((id) => !readyIds.has(id))
+    .map((id) => room.players.get(id)?.name || 'Unknown');
+  room.lastAction = `${player.name} is ready. Waiting on ${waitingOn.join(', ')}.`;
+  setRoomEvent(room, 'start_check_updated', player, {
+    currentTurnPlayerId: room.currentTurnPlayerId
+  });
+}
+
 function openUnknownWordVote(room, player, proposal, requestUrl) {
   room.idleAutoFlipCount = 0;
   clearTurnTimer(room);
@@ -630,6 +702,7 @@ function openUnknownWordVote(room, player, proposal, requestUrl) {
 function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureGameStarted(room);
   ensureNoPendingVote(room);
   ensurePresenceCheckCleared(room);
   const proposal = buildPlayProposal(room, rawWord, sourceWordId);
@@ -647,6 +720,7 @@ function claimOrStealWord(room, playerId, rawWord, sourceWordId, requestUrl) {
 function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureGameStarted(room);
   ensureNoPendingVote(room);
   ensurePresenceCheckCleared(room);
   const source = room.words.find((entry) => entry.id === sourceWordId);
@@ -804,6 +878,7 @@ function vote(room, playerId, decision, requestUrl) {
 function flipTile(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureGameStarted(room);
   ensureNoPendingVote(room);
   ensurePresenceCheckCleared(room);
   ensureFlipTurn(room, playerId);
@@ -849,6 +924,7 @@ function sendChatMessage(room, playerId, rawMessage, requestUrl) {
 function endRound(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
+  ensureGameStarted(room);
   ensureNoPendingVote(room);
   ensurePresenceCheckCleared(room);
   if (room.bag.length > 0) {
@@ -903,6 +979,23 @@ function serializePendingVote(room) {
       playerId,
       playerName: room.players.get(playerId)?.name || 'Unknown',
       decision: room.pendingVote.votes[playerId] || null
+    }))
+  };
+}
+
+function serializeStartCheck(room) {
+  if (room.startedAt || room.players.size < 2 || !room.startCheck) {
+    return null;
+  }
+
+  return {
+    title: 'Ready to begin?',
+    description: 'Everyone needs to confirm before the first tile flips.',
+    readyLabel: "I'm ready",
+    players: room.startCheck.eligiblePlayerIds.map((playerId) => ({
+      playerId,
+      playerName: room.players.get(playerId)?.name || 'Unknown',
+      ready: room.startCheck.readyPlayerIds.includes(playerId)
     }))
   };
 }
@@ -964,8 +1057,10 @@ function serializeRoom(room, requestUrl) {
       canChallenge: Boolean(word.stealHistory && word.stealHistory.length) && !room.pendingVote
     })),
     currentTurnPlayerId: room.currentTurnPlayerId,
-    currentTurnPlayerName: room.pendingVote ? null : room.players.get(room.currentTurnPlayerId)?.name || null,
-    turnDeadlineAt: room.pendingVote ? null : room.turnDeadlineAt,
+    currentTurnPlayerName: room.startedAt && !room.pendingVote ? room.players.get(room.currentTurnPlayerId)?.name || null : null,
+    turnDeadlineAt: room.startedAt && !room.pendingVote ? room.turnDeadlineAt : null,
+    started: Boolean(room.startedAt),
+    startCheck: serializeStartCheck(room),
     presenceCheck: serializePresenceCheck(room),
     pendingVote: serializePendingVote(room),
     ended: room.ended,
@@ -1079,9 +1174,6 @@ const server = http.createServer(async (request, response) => {
       const body = await parseJsonBody(request);
       const playerId = getOrCreatePlayerId(body.playerId);
       const room = createRoom(playerId, body.name);
-      if (!room.turnTimer) {
-        scheduleTurnTimeout(room, requestUrl);
-      }
       sendJson(response, 201, {
         playerId,
         room: serializeRoom(room, requestUrl)
@@ -1089,7 +1181,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|resume|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|ready|flip|play|challenge|vote|chat|resume|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -1122,14 +1214,18 @@ const server = http.createServer(async (request, response) => {
 
       if (request.method === 'POST' && action === 'join') {
         joinRoom(room, playerId, body.name);
-        if (!room.turnTimer && !room.pendingVote && !room.ended) {
-          scheduleTurnTimeout(room, requestUrl);
-        }
         broadcastRoom(room, requestUrl);
         sendJson(response, 200, {
           playerId,
           room: serializeRoom(room, requestUrl)
         });
+        return;
+      }
+
+      if (request.method === 'POST' && action === 'ready') {
+        confirmStart(room, playerId, requestUrl);
+        broadcastRoom(room, requestUrl);
+        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
@@ -1206,5 +1302,6 @@ module.exports = {
   resumePresenceCheck,
   flipTile,
   endRound,
+  confirmStart,
   serializeRoom
 };

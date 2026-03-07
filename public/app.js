@@ -36,9 +36,14 @@ const elements = {
   chatForm: document.querySelector('#chat-form'),
   chatInput: document.querySelector('#chat-input'),
   chatFlash: document.querySelector('#chat-flash'),
+  startPanel: document.querySelector('#start-panel'),
   votePanel: document.querySelector('#vote-panel'),
   presencePanel: document.querySelector('#presence-panel'),
   homeButton: document.querySelector('#home-button'),
+  startTitle: document.querySelector('#start-title'),
+  startDescription: document.querySelector('#start-description'),
+  startList: document.querySelector('#start-list'),
+  startReady: document.querySelector('#start-ready'),
   voteTitle: document.querySelector('#vote-title'),
   voteDescription: document.querySelector('#vote-description'),
   voteTimer: document.querySelector('#vote-timer'),
@@ -368,6 +373,11 @@ function renderTurnState(room) {
     elements.flipTile.textContent = 'Flip tile';
     return;
   }
+  if (!room.started) {
+    elements.turnIndicator.textContent = room.players.length < 2 ? 'Waiting for players' : 'Waiting to begin';
+    elements.flipTile.textContent = room.players.length < 2 ? 'Waiting for players' : 'Waiting to begin';
+    return;
+  }
   if (room.presenceCheck) {
     elements.turnIndicator.textContent = 'Paused';
     elements.flipTile.textContent = 'Paused';
@@ -382,6 +392,41 @@ function renderTurnState(room) {
   const isYourTurn = room.currentTurnPlayerId === state.playerId;
   elements.turnIndicator.textContent = isYourTurn ? 'You' : room.currentTurnPlayerName || 'Waiting...';
   elements.flipTile.textContent = isYourTurn ? 'Flip tile' : `${room.currentTurnPlayerName || 'Waiting'} is up`;
+}
+
+function renderStartPanel(room) {
+  if (room.started) {
+    elements.startPanel.classList.add('hidden');
+    return;
+  }
+
+  elements.startPanel.classList.remove('hidden');
+
+  if (room.players.length < 2 || !room.startCheck) {
+    elements.startTitle.textContent = 'Waiting for another player';
+    elements.startDescription.textContent = 'Share the room link or code. Tiles will stay still until at least two players are here.';
+    elements.startList.innerHTML = room.players.map((player) => `
+      <div class="vote-row voted">
+        <span>${player.name}${player.id === state.playerId ? ' (You)' : ''}</span>
+        <strong>here</strong>
+      </div>
+    `).join('');
+    elements.startReady.textContent = 'Need 2 players';
+    elements.startReady.disabled = true;
+    return;
+  }
+
+  const myReady = room.startCheck.players.some((player) => player.playerId === state.playerId && player.ready);
+  elements.startTitle.textContent = room.startCheck.title;
+  elements.startDescription.textContent = room.startCheck.description;
+  elements.startList.innerHTML = room.startCheck.players.map((player) => `
+    <div class="vote-row ${player.ready ? 'voted' : 'pending'}">
+      <span>${player.playerName}${player.playerId === state.playerId ? ' (You)' : ''}</span>
+      <strong>${player.ready ? 'ready' : 'waiting'}</strong>
+    </div>
+  `).join('');
+  elements.startReady.textContent = myReady ? 'Ready' : room.startCheck.readyLabel;
+  elements.startReady.disabled = myReady;
 }
 
 function renderPresencePanel(room) {
@@ -479,13 +524,19 @@ function renderVotePanel(room) {
 
 function renderFinalPanel(room) {
   const bagEmpty = room.bagRemaining === 0;
-  elements.endRound.disabled = !bagEmpty || room.ended || Boolean(room.pendingVote) || Boolean(room.presenceCheck);
+  elements.endRound.disabled = !room.started || !bagEmpty || room.ended || Boolean(room.pendingVote) || Boolean(room.presenceCheck);
 
   if (room.ended) {
     const winnerCopy = room.winners.length > 1
       ? `${room.winners.join(' and ')} tied for the win.`
       : `${room.winners[0] || 'Nobody'} wins the round.`;
     elements.finalCopy.textContent = winnerCopy;
+    return;
+  }
+  if (!room.started) {
+    elements.finalCopy.textContent = room.players.length < 2
+      ? 'Invite one more player. The round will not start yet.'
+      : 'Everyone needs to confirm before the first tile flips.';
     return;
   }
   if (room.pendingVote) {
@@ -510,16 +561,17 @@ function renderRoom() {
   }
 
   const isYourTurn = room.currentTurnPlayerId === state.playerId;
+  const waitingToStart = !room.started;
   const pausedForVote = Boolean(room.pendingVote);
   const pausedForPresence = Boolean(room.presenceCheck);
 
   elements.roomCode.textContent = room.code;
   elements.bagCount.textContent = String(room.bagRemaining);
   elements.lastAction.textContent = room.lastAction || 'Waiting for the next move.';
-  elements.flipTile.disabled = room.ended || room.bagRemaining === 0 || !isYourTurn || pausedForVote || pausedForPresence;
-  elements.playWord.disabled = room.ended || pausedForVote || pausedForPresence;
-  elements.playSource.disabled = room.ended || pausedForVote || pausedForPresence;
-  elements.playForm.querySelector('button').disabled = room.ended || pausedForVote || pausedForPresence;
+  elements.flipTile.disabled = waitingToStart || room.ended || room.bagRemaining === 0 || !isYourTurn || pausedForVote || pausedForPresence;
+  elements.playWord.disabled = waitingToStart || room.ended || pausedForVote || pausedForPresence;
+  elements.playSource.disabled = waitingToStart || room.ended || pausedForVote || pausedForPresence;
+  elements.playForm.querySelector('button').disabled = waitingToStart || room.ended || pausedForVote || pausedForPresence;
   elements.chatInput.disabled = false;
   elements.chatForm.querySelector('button').disabled = false;
   renderTurnState(room);
@@ -527,6 +579,7 @@ function renderRoom() {
   renderPlayOptions(room.allWords);
   renderCompactWords(room);
   renderPlayers(room);
+  renderStartPanel(room);
   renderVotePanel(room);
   renderPresencePanel(room);
   renderFinalPanel(room);
@@ -539,6 +592,7 @@ function applyRoomUpdate(room, allowEffects) {
   const nextEventId = room.lastEvent?.id || 0;
   const becameYourTurn = previousRoom
     && previousRoom.currentTurnPlayerId !== state.playerId
+    && room.started
     && room.currentTurnPlayerId === state.playerId
     && !room.ended
     && !room.pendingVote
@@ -559,6 +613,15 @@ function applyRoomUpdate(room, allowEffects) {
   }
   if (room.lastEvent?.type === 'chat' && room.lastEvent.message) {
     showChatFlash(room.lastEvent.actorName || 'Player', room.lastEvent.message);
+  }
+  if (room.lastEvent?.type === 'start_check_opened') {
+    showToast('Everyone confirm before the first flip.', 2200);
+  }
+  if (room.lastEvent?.type === 'start_check_updated') {
+    showToast('Ready status updated.', 1600);
+  }
+  if (room.lastEvent?.type === 'game_started') {
+    showToast('Game started.', 1800);
   }
   if (room.lastEvent?.type === 'challenge_opened' || room.lastEvent?.type === 'word_vote_opened') {
     showToast('Vote opened. Everyone needs to vote.', 2200);
@@ -725,6 +788,14 @@ elements.playersGrid.addEventListener('click', async (event) => {
   const nextWordId = word.dataset.wordId === state.selectedSourceWordId ? '' : word.dataset.wordId;
   setSelectedSourceWord(nextWordId);
   elements.playWord.focus();
+});
+
+elements.startReady.addEventListener('click', async () => {
+  try {
+    await sendAction('ready');
+  } catch (error) {
+    showToast(error.message);
+  }
 });
 
 elements.voteApprove.addEventListener('click', async () => {
