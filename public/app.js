@@ -8,6 +8,7 @@ const state = {
   shownJessRoomKey: null,
   selectedSourceWordId: '',
   voteCountdownTimer: null,
+  endCountdownTimer: null,
   lastVoteCountdownSecond: null,
   currentVoteId: null,
   inviteRoomCode: ''
@@ -60,6 +61,8 @@ const elements = {
   messageModalClose: document.querySelector('#message-modal-close'),
   toast: document.querySelector('#toast'),
   finalCopy: document.querySelector('#final-copy'),
+  finalTimer: document.querySelector('#final-timer'),
+  finalVisual: document.querySelector('#final-visual'),
   endRound: document.querySelector('#end-round')
 };
 
@@ -294,6 +297,7 @@ function leaveRoom() {
   }
   state.room = null;
   clearVoteCountdown();
+  clearEndCountdown();
   hideChatFlash();
   elements.chatInput.value = '';
   setSelectedSourceWord('');
@@ -326,9 +330,11 @@ function renderTiles(tiles) {
 }
 
 function renderCompactWords(room) {
+  const freshWordId = ['claim', 'steal'].includes(room.lastEvent?.type) ? room.lastEvent.wordId : '';
   const words = room.allWords.map((word) => {
     const selectedClass = state.selectedSourceWordId === word.id ? ' selected' : '';
-    return `<button class="compact-word-chip${selectedClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()}</button>`;
+    const freshClass = freshWordId === word.id ? ' fresh' : '';
+    return `<button class="compact-word-chip${selectedClass}${freshClass}" data-action="pick-source" data-word-id="${word.id}" type="button">${word.text.toUpperCase()}</button>`;
   });
 
   elements.compactWords.innerHTML = words.length
@@ -433,6 +439,38 @@ function clearVoteCountdown() {
   state.currentVoteId = null;
 }
 
+function clearEndCountdown() {
+  if (state.endCountdownTimer) {
+    clearInterval(state.endCountdownTimer);
+    state.endCountdownTimer = null;
+  }
+}
+
+function updateEndCountdown() {
+  const room = state.room;
+  if (!room || room.ended || !room.endDeadlineAt || room.pendingVote || room.presenceCheck) {
+    elements.finalTimer.textContent = '';
+    clearEndCountdown();
+    return;
+  }
+
+  const secondsLeft = Math.max(0, Math.ceil((room.endDeadlineAt - Date.now()) / 1000));
+  elements.finalTimer.textContent = `Round ends automatically in ${secondsLeft} second${secondsLeft === 1 ? '' : 's'}.`;
+}
+
+function ensureEndCountdown(room) {
+  if (!room.endDeadlineAt || room.ended || room.pendingVote || room.presenceCheck) {
+    elements.finalTimer.textContent = '';
+    clearEndCountdown();
+    return;
+  }
+
+  updateEndCountdown();
+  if (!state.endCountdownTimer) {
+    state.endCountdownTimer = window.setInterval(updateEndCountdown, 200);
+  }
+}
+
 function updateVoteCountdown() {
   const pendingVote = state.room?.pendingVote;
   if (!pendingVote?.deadlineAt) {
@@ -505,35 +543,84 @@ function renderVotePanel(room) {
   }).join('');
 }
 
+function renderPodium(room) {
+  const leaders = room.players.slice(0, 3);
+  if (!leaders.length) {
+    elements.finalVisual.classList.add('hidden');
+    elements.finalVisual.innerHTML = '';
+    return;
+  }
+
+  const displayOrder = leaders.length === 1 ? [0] : leaders.length === 2 ? [0, 1] : [1, 0, 2];
+  const placeLabels = ['1st', '2nd', '3rd'];
+  const stepClasses = ['top', 'mid', 'low'];
+
+  elements.finalVisual.classList.remove('hidden');
+  elements.finalVisual.innerHTML = `
+    <div class="podium-burst" aria-hidden="true">✦ ✦ ✦</div>
+    <div class="podium">
+      ${displayOrder.map((leaderIndex, orderIndex) => {
+        const player = leaders[leaderIndex];
+        const isWinner = room.winners.includes(player.name);
+        return `
+          <div class="podium-slot ${stepClasses[orderIndex]} ${isWinner ? 'winner' : ''}">
+            <div class="podium-rank">${isWinner ? '👑' : '✦'} ${placeLabels[leaderIndex]}</div>
+            <div class="podium-name">${player.name}</div>
+            <div class="podium-score">${player.score} pts</div>
+            <div class="podium-step"></div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 function renderFinalPanel(room) {
   const bagEmpty = room.bagRemaining === 0;
+  elements.endRound.textContent = room.ended ? 'Round ended' : 'End round now';
   elements.endRound.disabled = !room.started || !bagEmpty || room.ended || Boolean(room.pendingVote) || Boolean(room.presenceCheck);
 
   if (room.ended) {
+    clearEndCountdown();
     const winnerCopy = room.winners.length > 1
       ? `${room.winners.join(' and ')} tied for the win.`
       : `${room.winners[0] || 'Nobody'} wins the round.`;
     elements.finalCopy.textContent = winnerCopy;
+    elements.finalTimer.textContent = 'Final scores locked.';
+    renderPodium(room);
     return;
   }
+
+  elements.finalVisual.classList.add('hidden');
+  elements.finalVisual.innerHTML = '';
+
   if (!room.started) {
+    clearEndCountdown();
     elements.finalCopy.textContent = room.players.length < 2
       ? 'Invite one more player. The round will not start yet.'
       : 'Flip a tile to start the game.';
+    elements.finalTimer.textContent = '';
     return;
   }
   if (room.pendingVote) {
+    clearEndCountdown();
     elements.finalCopy.textContent = 'Voting is open. Finish the vote before ending the round.';
+    elements.finalTimer.textContent = '';
     return;
   }
   if (room.presenceCheck) {
+    clearEndCountdown();
     elements.finalCopy.textContent = 'Game paused. Confirm you are still playing before ending the round.';
+    elements.finalTimer.textContent = '';
     return;
   }
   if (room.bagRemaining === 0) {
-    elements.finalCopy.textContent = 'The bag is empty. Resolve any votes, then end the round when ready.';
+    elements.finalCopy.textContent = 'The bag is empty. You have 30 seconds for final steals before the round ends automatically.';
+    ensureEndCountdown(room);
   } else {
     elements.finalCopy.textContent = 'Claims and steals reset who gets the next flip.';
+    elements.finalTimer.textContent = '';
+    clearEndCountdown();
   }
 }
 
@@ -572,6 +659,11 @@ function applyRoomUpdate(room, allowEffects) {
   const previousRoom = state.room;
   const previousEventId = previousRoom?.lastEvent?.id || 0;
   const nextEventId = room.lastEvent?.id || 0;
+
+  if (nextEventId > previousEventId && ['claim', 'steal'].includes(room.lastEvent?.type)) {
+    state.selectedSourceWordId = '';
+  }
+
   const becameYourTurn = previousRoom
     && previousRoom.currentTurnPlayerId !== state.playerId
     && room.started
@@ -598,6 +690,9 @@ function applyRoomUpdate(room, allowEffects) {
   }
   if (room.lastEvent?.type === 'challenge_opened' || room.lastEvent?.type === 'word_vote_opened') {
     showToast('Vote opened. Everyone needs to vote.', 2200);
+  }
+  if (room.lastEvent?.type === 'end' && room.lastEvent?.autoEnded) {
+    showToast('Time is up. Round ended automatically.', 2400);
   }
   if (room.lastEvent?.type === 'presence_check_opened') {
     showToast('Game paused. Confirm you are still playing.', 2400);
@@ -845,6 +940,7 @@ window.addEventListener('pointerdown', unlockAudio, { passive: true });
 window.addEventListener('keydown', unlockAudio);
 window.addEventListener('beforeunload', () => {
   clearVoteCountdown();
+  clearEndCountdown();
   if (state.eventSource) {
     state.eventSource.close();
   }

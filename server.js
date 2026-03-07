@@ -14,6 +14,7 @@ const KEEPALIVE_MS = 15000;
 const CHAT_MESSAGE_MAX_LENGTH = 140;
 const VOTE_TIMEOUT_MS = 10_000;
 const TURN_TIMEOUT_MS = 15_000;
+const END_ROUND_TIMEOUT_MS = 30_000;
 
 const TILE_DISTRIBUTION = {
   A: 13,
@@ -257,6 +258,35 @@ function scorePlayer(words) {
   return words.reduce((total, word) => total + scoreWord(word.text), 0);
 }
 
+function getSortedPlayers(room) {
+  const wordsByPlayer = new Map();
+  for (const playerId of room.players.keys()) {
+    wordsByPlayer.set(playerId, []);
+  }
+  for (const word of room.words) {
+    if (!wordsByPlayer.has(word.ownerId)) {
+      wordsByPlayer.set(word.ownerId, []);
+    }
+    wordsByPlayer.get(word.ownerId).push(word);
+  }
+
+  return Array.from(room.players.values()).map((player) => {
+    const words = wordsByPlayer.get(player.id) || [];
+    return {
+      id: player.id,
+      name: player.name,
+      score: scorePlayer(words),
+      words
+    };
+  }).sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
+}
+
+function getWinnerNames(players) {
+  return players.length
+    ? players.filter((player) => player.score === players[0].score).map((player) => player.name)
+    : [];
+}
+
 function generateRoomCode() {
   for (let attempt = 0; attempt < 1000; attempt += 1) {
     let code = '';
@@ -325,6 +355,8 @@ function createRoom(playerId, name) {
     currentTurnPlayerId: null,
     turnDeadlineAt: null,
     turnTimer: null,
+    endDeadlineAt: null,
+    endTimer: null,
     startedAt: null,
     idleAutoFlipCount: 0,
     presenceCheck: null,
@@ -365,6 +397,54 @@ function clearTurnTimer(room) {
     room.turnTimer = null;
   }
   room.turnDeadlineAt = null;
+}
+
+function clearEndTimer(room) {
+  if (room.endTimer) {
+    clearTimeout(room.endTimer);
+    room.endTimer = null;
+  }
+  room.endDeadlineAt = null;
+}
+
+function finishRound(room, actor, requestUrl, autoEnded = false) {
+  clearTurnTimer(room);
+  clearVoteTimer(room);
+  clearEndTimer(room);
+  room.ended = true;
+
+  if (autoEnded) {
+    const players = getSortedPlayers(room);
+    const winnerNames = getWinnerNames(players);
+    const summary = winnerNames.length ? winnerNames.join(' and ') : 'Nobody';
+    room.lastAction = `${summary} ${winnerNames.length > 1 ? 'share' : 'wins'} the round.`;
+  } else {
+    room.lastAction = `${actor?.name || 'A player'} ended the round.`;
+  }
+
+  setRoomEvent(room, 'end', actor, {
+    currentTurnPlayerId: room.currentTurnPlayerId,
+    autoEnded
+  });
+  broadcastRoom(room, requestUrl);
+}
+
+function ensureEndTimer(room, requestUrl, delayMs = END_ROUND_TIMEOUT_MS) {
+  if (room.endTimer || room.ended || !room.startedAt || room.pendingVote || room.presenceCheck || room.bag.length > 0) {
+    return;
+  }
+
+  room.endDeadlineAt = Date.now() + delayMs;
+  room.endTimer = setTimeout(() => {
+    if (room.ended || room.pendingVote || room.presenceCheck || room.bag.length > 0) {
+      clearEndTimer(room);
+      return;
+    }
+
+    finishRound(room, null, requestUrl, true);
+  }, delayMs);
+
+  room.endTimer.unref?.();
 }
 
 function ensureRoom(code) {
@@ -485,6 +565,7 @@ function applyPlayProposal(room, player, proposal, approvedByVote = false, reque
       text: proposal.word,
       ownerId: player.id,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
       stealHistory: []
     });
   } else {
@@ -504,6 +585,7 @@ function applyPlayProposal(room, player, proposal, approvedByVote = false, reque
     });
     source.text = proposal.word;
     source.ownerId = player.id;
+    source.updatedAt = Date.now();
   }
 
   setCurrentTurn(room, player.id);
@@ -516,10 +598,14 @@ function applyPlayProposal(room, player, proposal, approvedByVote = false, reque
     : `${player.name} ${verb} ${proposal.word.toUpperCase()}. ${player.name} flips next.`;
   setRoomEvent(room, proposal.mode, player, {
     word: proposal.word,
+    wordId: proposal.mode === 'claim' ? room.words[room.words.length - 1]?.id || null : proposal.sourceWordId,
     currentTurnPlayerId: room.currentTurnPlayerId,
     approvedByVote,
     turnDeadlineAt: room.turnDeadlineAt
   });
+  if (requestUrl) {
+    ensureEndTimer(room, requestUrl);
+  }
 }
 
 function performFlip(room, player, requestUrl, autoFlipped = false) {
@@ -533,9 +619,11 @@ function performFlip(room, player, requestUrl, autoFlipped = false) {
   room.currentTurnPlayerId = getNextTurnPlayerId(room, player.id);
   scheduleTurnTimeout(room, requestUrl);
   const nextPlayerName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
-  room.lastAction = autoFlipped
-    ? `${player.name} ran out of time. ${tile} flipped automatically. ${nextPlayerName} is up.`
-    : `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
+  room.lastAction = !room.bag.length
+    ? `${player.name} flipped ${tile}. The bag is empty. 30 seconds remain.`
+    : autoFlipped
+      ? `${player.name} ran out of time. ${tile} flipped automatically. ${nextPlayerName} is up.`
+      : `${player.name} flipped ${tile}. ${nextPlayerName} is up.`;
   setRoomEvent(room, 'flip', player, {
     tile,
     currentTurnPlayerId: room.currentTurnPlayerId,
@@ -543,6 +631,9 @@ function performFlip(room, player, requestUrl, autoFlipped = false) {
     autoFlipped,
     turnDeadlineAt: room.turnDeadlineAt
   });
+  if (requestUrl) {
+    ensureEndTimer(room, requestUrl);
+  }
 }
 
 function clearVoteTimer(room) {
@@ -587,6 +678,7 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
 
 function openPresenceCheck(room) {
   clearTurnTimer(room);
+  clearEndTimer(room);
   room.presenceCheck = {
     id: crypto.randomUUID(),
     title: 'Still playing?',
@@ -622,6 +714,7 @@ function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
 function openUnknownWordVote(room, player, proposal, requestUrl) {
   room.idleAutoFlipCount = 0;
   clearTurnTimer(room);
+  clearEndTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
     kind: 'word',
@@ -677,6 +770,7 @@ function openChallengeVote(room, playerId, sourceWordId, requestUrl) {
 
   room.idleAutoFlipCount = 0;
   clearTurnTimer(room);
+  clearEndTimer(room);
   room.pendingVote = {
     id: crypto.randomUUID(),
     kind: 'challenge',
@@ -725,6 +819,7 @@ function resolvePendingVote(room, actor, timedOut = false, requestUrl = null) {
       room.pendingVote = null;
       if (requestUrl) {
         scheduleTurnTimeout(room, requestUrl);
+        ensureEndTimer(room, requestUrl);
       }
       room.lastAction = timedOut
         ? `Vote timed out. ${source.text.toUpperCase()} stays with ${room.players.get(source.ownerId)?.name || 'Unknown'}.`
@@ -741,6 +836,7 @@ function resolvePendingVote(room, actor, timedOut = false, requestUrl = null) {
       room.pendingVote = null;
       if (requestUrl) {
         scheduleTurnTimeout(room, requestUrl);
+        ensureEndTimer(room, requestUrl);
       }
       room.lastAction = timedOut
         ? `Vote timed out. ${source.text.toUpperCase()} returns to ${room.players.get(source.ownerId)?.name || 'Unknown'}.`
@@ -770,6 +866,7 @@ function resolvePendingVote(room, actor, timedOut = false, requestUrl = null) {
   room.pendingVote = null;
   if (requestUrl) {
     scheduleTurnTimeout(room, requestUrl);
+    ensureEndTimer(room, requestUrl);
   }
   room.lastAction = timedOut
     ? `Vote timed out. ${pendingVote.wordText.toUpperCase()} was rejected.`
@@ -852,6 +949,7 @@ function resumePresenceCheck(room, playerId, requestUrl) {
   room.presenceCheck = null;
   room.idleAutoFlipCount = 0;
   scheduleTurnTimeout(room, requestUrl);
+  ensureEndTimer(room, requestUrl);
   const currentTurnName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
   room.lastAction = `${player.name} resumed the game. ${currentTurnName} is up.`;
   setRoomEvent(room, 'presence_check_resolved', player, {
@@ -882,11 +980,7 @@ function endRound(room, playerId, requestUrl) {
     throw badRequest('You can only end the round after the bag is empty.');
   }
 
-  clearTurnTimer(room);
-  room.ended = true;
-  room.lastAction = `${player.name} ended the round.`;
-  setRoomEvent(room, 'end', player, { currentTurnPlayerId: room.currentTurnPlayerId });
-  broadcastRoom(room, requestUrl);
+  finishRound(room, player, requestUrl, false);
 }
 
 function serializePendingVote(room) {
@@ -974,16 +1068,14 @@ function serializeRoom(room, requestUrl) {
     };
   }).sort((left, right) => right.score - left.score || left.name.localeCompare(right.name));
 
-  const winners = room.ended && players.length
-    ? players.filter((player) => player.score === players[0].score).map((player) => player.name)
-    : [];
+  const winners = room.ended ? getWinnerNames(players) : [];
 
   return {
     code: room.code,
     bagRemaining: room.bag.length,
     centerTiles: room.centerTiles,
     players,
-    allWords: room.words.map((word) => ({
+    allWords: room.words.slice().sort((left, right) => (left.updatedAt || left.createdAt || 0) - (right.updatedAt || right.createdAt || 0)).map((word) => ({
       id: word.id,
       text: word.text,
       ownerId: word.ownerId,
@@ -993,6 +1085,7 @@ function serializeRoom(room, requestUrl) {
     currentTurnPlayerId: room.currentTurnPlayerId,
     currentTurnPlayerName: room.startedAt && !room.pendingVote ? room.players.get(room.currentTurnPlayerId)?.name || null : null,
     turnDeadlineAt: room.startedAt && !room.pendingVote ? room.turnDeadlineAt : null,
+    endDeadlineAt: room.endDeadlineAt,
     started: Boolean(room.startedAt),
     presenceCheck: serializePresenceCheck(room),
     pendingVote: serializePendingVote(room),
@@ -1083,6 +1176,7 @@ function cleanupRooms() {
     if (room.updatedAt < cutoff) {
       clearTurnTimer(room);
       clearVoteTimer(room);
+      clearEndTimer(room);
       for (const client of room.clients) {
         client.end();
       }
