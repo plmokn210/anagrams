@@ -253,80 +253,6 @@ h3 {
   background: linear-gradient(180deg, rgba(255, 244, 238, 0.98), rgba(255, 251, 247, 0.98));
 }
 
-#start-panel {
-  margin-top: 1.25rem;
-  padding: 1.5rem;
-  border: 1px solid rgba(15, 90, 78, 0.18);
-  background:
-    radial-gradient(circle at top right, rgba(245, 205, 115, 0.42), transparent 28%),
-    linear-gradient(135deg, rgba(255, 252, 245, 0.98), rgba(235, 245, 242, 0.98));
-  box-shadow: 0 22px 48px rgba(15, 90, 78, 0.16);
-}
-
-#start-panel .vote-copy {
-  display: grid;
-  gap: 0.45rem;
-}
-
-#start-panel .eyebrow {
-  color: var(--brand-dark);
-}
-
-#start-panel h3 {
-  font-size: clamp(1.55rem, 3vw, 2.35rem);
-  margin-bottom: 0.2rem;
-}
-
-#start-panel p {
-  font-size: 1rem;
-  line-height: 1.45;
-}
-
-#start-panel .vote-actions {
-  justify-content: flex-start;
-}
-
-#start-ready {
-  min-height: 56px;
-  padding-inline: 1.5rem;
-  font-size: 1.02rem;
-  font-weight: 700;
-  background: var(--brand);
-  color: #fff;
-}
-
-#start-ready.secondary {
-  background: var(--brand);
-  color: #fff;
-}
-
-#start-ready:disabled {
-  opacity: 0.7;
-}
-
-#start-list {
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-}
-
-#game-panel.pregame .board,
-#game-panel.pregame .players-grid,
-#game-panel.pregame .chat-panel,
-#game-panel.pregame .final-panel {
-  opacity: 0.4;
-}
-
-#game-panel.pregame .board,
-#game-panel.pregame .players-grid,
-#game-panel.pregame .chat-panel {
-  pointer-events: none;
-  filter: saturate(0.75);
-}
-
-#game-panel.pregame .status-strip {
-  background: rgba(15, 90, 78, 0.12);
-  border: 1px solid rgba(15, 90, 78, 0.12);
-}
-
 .vote-copy p,
 .vote-copy h3 {
   margin-bottom: 0.35rem;
@@ -730,18 +656,6 @@ h3 {
   .panel.inset,
   .vote-panel {
     border-radius: 18px;
-  }
-
-  #start-panel {
-    padding: 1.15rem;
-  }
-
-  #start-panel h3 {
-    font-size: 1.45rem;
-  }
-
-  #start-list {
-    grid-template-columns: 1fr;
   }
 
   .compact-word-strip {

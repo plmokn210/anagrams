@@ -326,7 +326,6 @@ function createRoom(playerId, name) {
     turnDeadlineAt: null,
     turnTimer: null,
     startedAt: null,
-    startCheck: null,
     idleAutoFlipCount: 0,
     presenceCheck: null,
     pendingVote: null,
@@ -352,15 +351,11 @@ function joinRoom(room, playerId, name) {
     room.currentTurnPlayerId = playerId;
   }
   room.updatedAt = Date.now();
-
-  if (!room.startedAt && room.players.size >= 2) {
-    openStartCheck(room);
-    return;
-  }
-
   room.lastAction = room.startedAt
     ? `${safePlayerName(name)} joined the room.`
-    : `${safePlayerName(name)} joined the room. Waiting for one more player to begin.`;
+    : room.players.size < 2
+      ? `${safePlayerName(name)} joined the room. Waiting for one more player to begin.`
+      : `${safePlayerName(name)} joined the room. Flip a tile when you are ready to start.`;
   setRoomEvent(room, 'join', room.players.get(playerId), { currentTurnPlayerId: room.currentTurnPlayerId });
 }
 
@@ -413,7 +408,7 @@ function ensureGameStarted(room) {
   if (room.players.size < 2) {
     throw badRequest('Wait for another player to join first.');
   }
-  throw badRequest('Everyone needs to confirm before the game begins.');
+  throw badRequest('Flip a tile to start the game.');
 }
 
 function ensureFlipTurn(room, playerId) {
@@ -590,19 +585,6 @@ function scheduleTurnTimeout(room, requestUrl, delayMs = TURN_TIMEOUT_MS) {
   room.turnTimer.unref?.();
 }
 
-function openStartCheck(room) {
-  clearTurnTimer(room);
-  room.startCheck = {
-    id: crypto.randomUUID(),
-    eligiblePlayerIds: getTurnOrder(room).map((entry) => entry.id),
-    readyPlayerIds: []
-  };
-  room.lastAction = 'Everyone is here. Confirm when you want to begin.';
-  setRoomEvent(room, 'start_check_opened', null, {
-    currentTurnPlayerId: room.currentTurnPlayerId
-  });
-}
-
 function openPresenceCheck(room) {
   clearTurnTimer(room);
   room.presenceCheck = {
@@ -635,45 +617,6 @@ function scheduleVoteTimeout(room, requestUrl, delayMs = VOTE_TIMEOUT_MS) {
   }, delayMs);
 
   room.voteTimer.unref?.();
-}
-
-function confirmStart(room, playerId, requestUrl) {
-  const player = ensurePlayer(room, playerId);
-  ensureRoundOpen(room);
-
-  if (room.startedAt) {
-    return;
-  }
-  if (!room.startCheck || room.players.size < 2) {
-    throw badRequest('Wait for another player to join first.');
-  }
-
-  const readyIds = new Set(room.startCheck.readyPlayerIds);
-  readyIds.add(player.id);
-  room.startCheck.readyPlayerIds = room.startCheck.eligiblePlayerIds.filter((id) => readyIds.has(id));
-
-  const everyoneReady = room.startCheck.eligiblePlayerIds.every((id) => readyIds.has(id));
-  if (everyoneReady) {
-    room.startedAt = Date.now();
-    room.startCheck = null;
-    room.idleAutoFlipCount = 0;
-    const currentTurnName = room.players.get(room.currentTurnPlayerId)?.name || 'Nobody';
-    room.lastAction = `Everyone is ready. ${currentTurnName} flips first.`;
-    scheduleTurnTimeout(room, requestUrl);
-    setRoomEvent(room, 'game_started', player, {
-      currentTurnPlayerId: room.currentTurnPlayerId,
-      turnDeadlineAt: room.turnDeadlineAt
-    });
-    return;
-  }
-
-  const waitingOn = room.startCheck.eligiblePlayerIds
-    .filter((id) => !readyIds.has(id))
-    .map((id) => room.players.get(id)?.name || 'Unknown');
-  room.lastAction = `${player.name} is ready. Waiting on ${waitingOn.join(', ')}.`;
-  setRoomEvent(room, 'start_check_updated', player, {
-    currentTurnPlayerId: room.currentTurnPlayerId
-  });
 }
 
 function openUnknownWordVote(room, player, proposal, requestUrl) {
@@ -878,10 +821,18 @@ function vote(room, playerId, decision, requestUrl) {
 function flipTile(room, playerId, requestUrl) {
   const player = ensurePlayer(room, playerId);
   ensureRoundOpen(room);
-  ensureGameStarted(room);
   ensureNoPendingVote(room);
   ensurePresenceCheckCleared(room);
-  ensureFlipTurn(room, playerId);
+
+  if (room.players.size < 2) {
+    throw badRequest('Wait for another player to join first.');
+  }
+  if (room.startedAt) {
+    ensureFlipTurn(room, playerId);
+  } else {
+    room.startedAt = Date.now();
+    setCurrentTurn(room, player.id);
+  }
   if (!room.bag.length) {
     throw badRequest('No tiles are left to flip.');
   }
@@ -983,23 +934,6 @@ function serializePendingVote(room) {
   };
 }
 
-function serializeStartCheck(room) {
-  if (room.startedAt || room.players.size < 2 || !room.startCheck) {
-    return null;
-  }
-
-  return {
-    title: 'Ready to begin?',
-    description: 'Everyone needs to confirm before the first tile flips.',
-    readyLabel: "I'm ready",
-    players: room.startCheck.eligiblePlayerIds.map((playerId) => ({
-      playerId,
-      playerName: room.players.get(playerId)?.name || 'Unknown',
-      ready: room.startCheck.readyPlayerIds.includes(playerId)
-    }))
-  };
-}
-
 function serializePresenceCheck(room) {
   if (!room.presenceCheck) {
     return null;
@@ -1060,7 +994,6 @@ function serializeRoom(room, requestUrl) {
     currentTurnPlayerName: room.startedAt && !room.pendingVote ? room.players.get(room.currentTurnPlayerId)?.name || null : null,
     turnDeadlineAt: room.startedAt && !room.pendingVote ? room.turnDeadlineAt : null,
     started: Boolean(room.startedAt),
-    startCheck: serializeStartCheck(room),
     presenceCheck: serializePresenceCheck(room),
     pendingVote: serializePendingVote(room),
     ended: room.ended,
@@ -1181,7 +1114,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|ready|flip|play|challenge|vote|chat|resume|end))?$/);
+    const roomMatch = pathname.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|state|events|flip|play|challenge|vote|chat|resume|end))?$/);
     if (roomMatch) {
       const [, code, action = 'state'] = roomMatch;
       const room = ensureRoom(code);
@@ -1219,13 +1152,6 @@ const server = http.createServer(async (request, response) => {
           playerId,
           room: serializeRoom(room, requestUrl)
         });
-        return;
-      }
-
-      if (request.method === 'POST' && action === 'ready') {
-        confirmStart(room, playerId, requestUrl);
-        broadcastRoom(room, requestUrl);
-        sendJson(response, 200, { room: serializeRoom(room, requestUrl) });
         return;
       }
 
@@ -1302,6 +1228,5 @@ module.exports = {
   resumePresenceCheck,
   flipTile,
   endRound,
-  confirmStart,
   serializeRoom
 };
