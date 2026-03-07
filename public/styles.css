@@ -121,6 +121,33 @@ label span,
   margin-bottom: 1.5rem;
 }
 
+.hero-home {
+  display: inline-block;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2.5rem, 4vw, 4.4rem);
+  font-weight: 700;
+  line-height: 0.95;
+  margin: 0 0 0.6rem;
+  text-align: left;
+}
+
+.hero-home:hover {
+  background: transparent;
+  color: var(--brand-dark);
+  transform: none;
+}
+
+.hero-home:focus-visible {
+  outline: 2px solid rgba(15, 90, 78, 0.35);
+  outline-offset: 6px;
+}
+
 .eyebrow {
   margin: 0 0 0.25rem;
   text-transform: uppercase;
@@ -205,6 +232,14 @@ h3 {
 .split-form {
   margin-top: 1rem;
   align-items: end;
+}
+
+#lobby-panel.invite-only .panel-header {
+  margin-bottom: 1rem;
+}
+
+#lobby-panel.invite-only .split-form {
+  margin-top: 0;
 }
 
 .status-strip {

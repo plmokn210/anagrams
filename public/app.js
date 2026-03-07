@@ -9,7 +9,8 @@ const state = {
   selectedSourceWordId: '',
   voteCountdownTimer: null,
   lastVoteCountdownSecond: null,
-  currentVoteId: null
+  currentVoteId: null,
+  inviteRoomCode: ''
 };
 
 localStorage.setItem('anagrams-player-id', state.playerId);
@@ -17,6 +18,9 @@ localStorage.setItem('anagrams-player-id', state.playerId);
 const elements = {
   lobbyPanel: document.querySelector('#lobby-panel'),
   gamePanel: document.querySelector('#game-panel'),
+  heroHome: document.querySelector('#hero-home'),
+  lobbyTitle: document.querySelector('#lobby-title'),
+  lobbyCopy: document.querySelector('#lobby-copy'),
   createForm: document.querySelector('#create-form'),
   joinForm: document.querySelector('#join-form'),
   createName: document.querySelector('#create-name'),
@@ -61,8 +65,20 @@ const elements = {
 
 const params = new URLSearchParams(window.location.search);
 const prefilledRoom = (params.get('room') || '').toUpperCase();
+state.inviteRoomCode = prefilledRoom;
 if (prefilledRoom) {
   elements.joinCode.value = prefilledRoom;
+}
+
+function updateLobbyMode() {
+  const inviteMode = Boolean(state.inviteRoomCode);
+  elements.lobbyPanel.classList.toggle('invite-only', inviteMode);
+  elements.createForm.classList.toggle('hidden', inviteMode);
+  elements.lobbyTitle.textContent = inviteMode ? 'Join this room' : 'Start or join a room';
+  elements.lobbyCopy.textContent = inviteMode
+    ? 'Enter your name and join with the room code from the invite link.'
+    : 'Room links are private. Share the code or URL with one other player.';
+  elements.joinCode.value = state.inviteRoomCode || elements.joinCode.value;
 }
 
 function showToast(message, timeout = 2500) {
@@ -284,11 +300,18 @@ function leaveRoom() {
   history.replaceState({}, '', '/');
   elements.gamePanel.classList.add('hidden');
   elements.lobbyPanel.classList.remove('hidden');
+  updateLobbyMode();
 }
 
 function goHome() {
   closeJessMessage();
-  leaveRoom();
+  if (state.room) {
+    leaveRoom();
+  }
+  state.inviteRoomCode = '';
+  elements.joinCode.value = '';
+  updateLobbyMode();
+  history.replaceState({}, '', '/');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -796,6 +819,10 @@ elements.homeButton.addEventListener('click', () => {
   goHome();
 });
 
+elements.heroHome.addEventListener('click', () => {
+  goHome();
+});
+
 elements.messageModalClose.addEventListener('click', () => {
   closeJessMessage();
 });
@@ -826,3 +853,4 @@ window.addEventListener('beforeunload', () => {
 renderSoundToggle();
 closeJessMessage();
 hideChatFlash();
+updateLobbyMode();
